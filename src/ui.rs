@@ -1,5 +1,6 @@
 use eframe::egui::{self, TextFormat, text::LayoutJob};
-use egui::{Layout, TextureHandle, UiBuilder};
+use egui::{Layout, TextureHandle, UiBuilder, ViewportCommand};
+use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
 use nucleo_matcher::{Config, Matcher, Utf32String};
 use std::collections::HashMap;
 
@@ -12,6 +13,7 @@ pub struct App {
     matcher: Matcher,
     max_width: usize,
     icon_cache: HashMap<i32, TextureHandle>,
+    visible: bool,
 }
 
 impl App {
@@ -39,6 +41,7 @@ impl Default for App {
             matcher: Matcher::new(Config::DEFAULT),
             max_width: 0,
             icon_cache: HashMap::new(),
+            visible: true,
         }
     }
 }
@@ -47,6 +50,19 @@ impl eframe::App for App {
     // TODO: clean up AI slop
     // NOTE: egui can't render emojis
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        if let Ok(e) = GlobalHotKeyEvent::receiver().try_recv()
+            && e.state() == HotKeyState::Released
+        {
+            self.visible = !self.visible;
+            ctx.send_viewport_cmd(ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(ViewportCommand::Focus);
+        }
+
+        if !self.visible {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+            return;
+        }
+
         let frame = egui::Frame::default()
             .fill(egui::Color32::from_black_alpha(150))
             .corner_radius(10.0)
@@ -124,7 +140,9 @@ impl eframe::App for App {
                 }
 
                 if escape_pressed {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+                    self.visible = false;
+                    return;
                 }
 
                 if arrow_down && !filtered_items.is_empty() {
@@ -143,7 +161,8 @@ impl eframe::App for App {
                     && let Some(&(_, app, window, _, _)) = filtered_items.get(idx)
                 {
                     let _ = window.focus(&app.app);
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    ctx.send_viewport_cmd(ViewportCommand::Visible(false));
+                    self.visible = false;
                 }
 
                 // Display filtered windows

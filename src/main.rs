@@ -1,17 +1,35 @@
 use eframe::egui;
+use global_hotkey::{
+    GlobalHotKeyManager,
+    hotkey::{Code, HotKey, Modifiers},
+};
+use objc2::MainThreadMarker;
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 use objc2_application_services::AXUIElement;
 
-mod app;
 mod macos;
+mod ui;
 
 fn main() -> eframe::Result {
-    let window_size = egui::vec2(800.0, 400.0);
+    let mtm = MainThreadMarker::new().expect("App not started in main thread");
 
     unsafe {
         let system_wide = AXUIElement::new_system_wide();
         AXUIElement::set_messaging_timeout(&system_wide, 0.5);
     }
 
+    let manager = GlobalHotKeyManager::new().expect("Could not create GlobalHotKeyManager");
+    let hotkey = HotKey::new(Some(Modifiers::META), Code::KeyD);
+    manager
+        .register(hotkey)
+        .expect("Could not register hot key");
+
+    let app = NSApplication::sharedApplication(mtm);
+    if !app.setActivationPolicy(NSApplicationActivationPolicy::Accessory) {
+        println!("Could not set application as Accessory");
+    }
+
+    let window_size = egui::vec2(800.0, 400.0);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_decorations(false)
@@ -25,18 +43,8 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "switcheroo",
         options,
-        Box::new(|_cc| {
-            // let ctx = &cc.egui_ctx;
-            // let monitor_size = ctx.input(|i| i.viewport().monitor_size);
-            // if let Some(monitor_size) = monitor_size {
-            //     let centered_pos = egui::pos2(
-            //         (monitor_size.x - window_size.x) / 2.0,
-            //         (monitor_size.y - window_size.y) / 2.0,
-            //     );
-            //     ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(centered_pos));
-            // }
-
-            let app = app::App::new(windows);
+        Box::new(|_| {
+            let app = ui::App::new(windows);
             Ok(Box::new(app))
         }),
     )
