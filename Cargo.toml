@@ -5,11 +5,9 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.101"
-block2 = "0.6.2"
-eframe = "0.33.3"
-egui = "0.33.3"
 global-hotkey = "0.7.0"
 half = "2.7.1"
+iced = { version = "0.14.0", features = ["image", "tokio"] }
 nucleo-matcher = "0.3"
 objc2 = "0.6.3"
 objc2-app-kit = "0.3.2"
@@ -17,6 +15,14 @@ objc2-application-services = "0.3.2"
 objc2-core-foundation = "0.3.2"
 objc2-core-graphics = "0.3.2"
 objc2-foundation = "0.3.2"
-objc2-screen-capture-kit = "0.3.2"
-raw-window-handle = "0.6.2"
-window-vibrancy = "0.7.1"
+
+[package.metadata.bundle]
+name = "switcheroo"
+identifier = "com.bootreer.switcheroo"
+version = "0.0.0"
+icon = [ "assets/artemgus.icns" ]
+
+osx_info_plist_snippet = '''
+<key>LSUIElement</key>
+<true/>
+'''

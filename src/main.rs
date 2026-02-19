@@ -1,51 +1,38 @@
-use eframe::egui;
 use global_hotkey::{
     GlobalHotKeyManager,
     hotkey::{Code, HotKey, Modifiers},
 };
-use objc2::MainThreadMarker;
-use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy};
 use objc2_application_services::AXUIElement;
 
 mod macos;
 mod ui;
+mod windows;
 
-fn main() -> eframe::Result {
-    let mtm = MainThreadMarker::new().expect("App not started in main thread");
-
+fn main() -> iced::Result {
     unsafe {
         let system_wide = AXUIElement::new_system_wide();
         AXUIElement::set_messaging_timeout(&system_wide, 0.5);
     }
 
-    let manager = GlobalHotKeyManager::new().expect("Could not create GlobalHotKeyManager");
+    macos::set_accessory_mode();
+
+    let hotkey_manager = GlobalHotKeyManager::new().expect("Could not create GlobalHotKeyManager");
     let hotkey = HotKey::new(Some(Modifiers::META), Code::KeyD);
-    manager
+    hotkey_manager
         .register(hotkey)
         .expect("Could not register hot key");
 
-    let app = NSApplication::sharedApplication(mtm);
-    if !app.setActivationPolicy(NSApplicationActivationPolicy::Accessory) {
-        println!("Could not set application as Accessory");
-    }
+    // Leak the hotkey manager
+    std::mem::forget(hotkey_manager);
 
-    let window_size = egui::vec2(800.0, 400.0);
-    let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_decorations(false)
-            .with_inner_size(window_size)
-            .with_transparent(true)
-            .with_always_on_top(),
-        ..Default::default()
-    };
-
-    let windows = macos::get_open_app_windows().expect("Couldn't get open windows");
-    eframe::run_native(
-        "switcheroo",
-        options,
-        Box::new(|_| {
-            let app = ui::App::new(windows);
-            Ok(Box::new(app))
-        }),
-    )
+    iced::daemon(ui::boot, ui::update, ui::view)
+        .title(ui::title)
+        .subscription(ui::subscription)
+        .style(
+            |_state: &ui::Switcheroo, _theme: &iced::Theme| iced::theme::Style {
+                background_color: iced::Color::TRANSPARENT,
+                text_color: iced::Color::WHITE,
+            },
+        )
+        .run()
 }
