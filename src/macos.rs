@@ -4,10 +4,10 @@ use std::{
     ptr::NonNull,
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
-use objc2::rc::Retained;
 use objc2::MainThreadMarker;
+use objc2::rc::Retained;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSImage};
 #[allow(deprecated)]
 use objc2_application_services::{AXError, AXUIElement};
@@ -17,8 +17,8 @@ use objc2_core_foundation::{
 };
 use objc2_core_graphics::CGWindowID;
 use objc2_core_graphics::{
-    kCGNullWindowID as NullID, kCGWindowLayer, kCGWindowName, kCGWindowNumber, kCGWindowOwnerPID,
     CGDataProvider, CGError, CGImage, CGWindowListCopyWindowInfo, CGWindowListOption as Options,
+    kCGNullWindowID as NullID, kCGWindowLayer, kCGWindowName, kCGWindowNumber, kCGWindowOwnerPID,
 };
 
 // Undocumented internal macos framework

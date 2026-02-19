@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
-use iced::keyboard;
+use iced::keyboard::{self, Key, key::Named};
 use iced::widget::{
     center, column, container, image, rich_text, row, scrollable, span, text_input,
 };
@@ -64,7 +64,11 @@ pub fn update(state: &mut Switcheroo, message: Message) -> Task<Message> {
             }
             state.query.clear();
             state.filtered_count = get_filtered_items(state).len();
-            state.selected = if state.filtered_count > 0 { Some(0) } else { None };
+            state.selected = if state.filtered_count > 0 {
+                Some(0)
+            } else {
+                None
+            };
 
             let (id, open_task) = window::open(window::Settings {
                 size: iced::Size::new(800.0, 400.0),
@@ -97,7 +101,11 @@ pub fn update(state: &mut Switcheroo, message: Message) -> Task<Message> {
         Message::QueryChanged(query) => {
             state.query = query;
             state.filtered_count = get_filtered_items(state).len();
-            state.selected = if state.filtered_count > 0 { Some(0) } else { None };
+            state.selected = if state.filtered_count > 0 {
+                Some(0)
+            } else {
+                None
+            };
             Task::none()
         }
         Message::SelectNext => {
@@ -276,26 +284,23 @@ pub fn subscription(state: &Switcheroo) -> Subscription<Message> {
     ];
 
     if state.picker_window.is_some() {
-        subs.push(keyboard::listen().map(|event| {
-            use keyboard::key::Named;
-            use keyboard::{Event, Key};
-
-            match event {
-                Event::KeyPressed {
-                    key: Key::Named(Named::ArrowDown),
-                    ..
-                } => Message::SelectNext,
-                Event::KeyPressed {
-                    key: Key::Named(Named::ArrowUp),
-                    ..
-                } => Message::SelectPrev,
-                Event::KeyPressed {
+        subs.push(iced::event::listen_with(
+            |event, status, _window| match event {
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
                     key: Key::Named(Named::Escape),
                     ..
-                } => Message::HidePicker,
-                _ => Message::NoOp,
-            }
-        }));
+                }) => Some(Message::HidePicker),
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: Key::Named(Named::ArrowDown),
+                    ..
+                }) if status == iced::event::Status::Ignored => Some(Message::SelectNext),
+                iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                    key: Key::Named(Named::ArrowUp),
+                    ..
+                }) if status == iced::event::Status::Ignored => Some(Message::SelectPrev),
+                _ => None,
+            },
+        ));
     }
 
     Subscription::batch(subs)
