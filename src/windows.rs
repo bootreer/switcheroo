@@ -133,6 +133,8 @@ pub struct Window {
 
 impl Window {
     pub fn focus(&self, app: &NSRunningApplication) -> Result<()> {
+        macos::switch_to_space_instant(self.space_id, &self.display_uuid);
+
         let pid = app.processIdentifier();
         let mut psn = ProcessSerialNumber::default();
 
