@@ -81,6 +81,8 @@ impl Manager {
                 app.windows.push(Window {
                     title: info.title,
                     id: info.id,
+                    space_id: info.space_id,
+                    display_uuid: info.display_uuid,
                     ax_element: ax_element.clone(),
                 });
             }
@@ -123,6 +125,8 @@ impl App {
 pub struct Window {
     pub title: String,
     pub id: u32,
+    pub space_id: u64,
+    pub display_uuid: String,
     ax_element: Retained<AXUIElement>,
 }
 

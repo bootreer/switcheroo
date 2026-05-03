@@ -92,22 +92,29 @@ pub struct WindowInfo {
     pub id: u32,
     pub title: String,
     pub pid: i32,
+    pub space_id: u64,
+    pub display_uuid: String,
 }
 
-pub fn get_visible_window_ids() -> Result<HashSet<u32>> {
+pub fn get_visible_window_ids() -> Result<HashMap<u32, (u64, String)>> {
     let cid = unsafe { SLSMainConnectionID() };
     let dicts = unsafe {
         let ptr = NonNull::new_unchecked(SLSCopyManagedDisplaySpaces(cid) as *mut CFArray<CFDict>);
         CFRetained::from_raw(ptr)
     };
 
-    let mut visible = HashSet::new();
+    let mut visible = HashMap::new();
 
     for display in dicts {
+        let display_uuid = get_value::<CFString>(&display, &CFString::from_static_str("Display Identifier"))
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+
         let spaces = get_value_unchecked::<CFArray>(&display, &CFString::from_static_str("Spaces"));
 
         for space in unsafe { spaces.cast_unchecked::<CFDict>() } {
             let id = get_value_unchecked::<CFNumber>(&space, &CFString::from_static_str("id64"));
+            let space_id = id.as_i64().unwrap() as u64;
 
             let options = 0x2;
             let mut set_tags: u64 = 0;
@@ -131,7 +138,7 @@ pub fn get_visible_window_ids() -> Result<HashSet<u32>> {
             };
 
             for wid in arr {
-                visible.insert(wid.as_i64().unwrap() as u32);
+                visible.insert(wid.as_i64().unwrap() as u32, (space_id, display_uuid.clone()));
             }
         }
     }
@@ -139,7 +146,7 @@ pub fn get_visible_window_ids() -> Result<HashSet<u32>> {
     Ok(visible)
 }
 
-pub fn get_window_info_list(visible: &HashSet<u32>) -> Result<Vec<WindowInfo>> {
+pub fn get_window_info_list(visible: &HashMap<u32, (u64, String)>) -> Result<Vec<WindowInfo>> {
     let Some(window_list) = CGWindowListCopyWindowInfo(Options::ExcludeDesktopElements, NullID)
     else {
         return Err(anyhow!("CGWindowListCopyWindowInfo failed."));
@@ -150,24 +157,31 @@ pub fn get_window_info_list(visible: &HashSet<u32>) -> Result<Vec<WindowInfo>> {
         let layer = get_value_unchecked::<CFNumber>(&dict, unsafe { kCGWindowLayer })
             .as_i32()
             .unwrap();
+        if layer != 0 {
+            continue;
+        }
+
+        let window_number = get_value_unchecked::<CFNumber>(&dict, unsafe { kCGWindowNumber })
+            .as_i64()
+            .unwrap() as u32;
+
+        let Some((space_id, display_uuid)) = visible.get(&window_number) else {
+            continue;
+        };
+
         let pid = get_value_unchecked::<CFNumber>(&dict, unsafe { kCGWindowOwnerPID })
             .as_i32()
             .unwrap();
         let title = get_value::<CFString>(&dict, unsafe { kCGWindowName })
             .map(|v| v.to_string())
             .unwrap_or_default();
-        let window_number = get_value_unchecked::<CFNumber>(&dict, unsafe { kCGWindowNumber })
-            .as_i64()
-            .unwrap() as u32;
-
-        if layer != 0 || !visible.contains(&window_number) {
-            continue;
-        }
 
         result.push(WindowInfo {
             id: window_number,
             title,
             pid,
+            space_id: *space_id,
+            display_uuid: display_uuid.clone(),
         });
     }
 
