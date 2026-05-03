@@ -49,6 +49,121 @@ unsafe extern "C" {
     pub fn SLSGetWindowBounds(cid: u32, wid: CGWindowID, bounds: *mut CGRect) -> CGError;
 }
 
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    fn CGEventCreate(source: *const c_void) -> *mut c_void;
+    fn CGEventSetIntegerValueField(event: *mut c_void, field: u32, value: i64);
+    fn CGEventSetDoubleValueField(event: *mut c_void, field: u32, value: f64);
+    fn CGEventPost(tap: u32, event: *const c_void);
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFRelease(cf: *const c_void);
+}
+
+// Private CGEventField values and constants — sourced from ISS.c
+const FIELD_CGS_EVENT_TYPE: u32 = 55;
+const FIELD_GESTURE_HID_TYPE: u32 = 110;
+const FIELD_GESTURE_SWIPE_MOTION: u32 = 123;
+const FIELD_GESTURE_SWIPE_PROGRESS: u32 = 124;
+const FIELD_GESTURE_SWIPE_VELOCITY_X: u32 = 129;
+const FIELD_GESTURE_SWIPE_VELOCITY_Y: u32 = 130;
+const FIELD_GESTURE_PHASE: u32 = 132;
+
+const CGS_EVENT_DOCK_CONTROL: i64 = 30;
+const IO_HID_EVENT_TYPE_DOCK_SWIPE: i64 = 23;
+const CGS_GESTURE_MOTION_HORIZONTAL: i64 = 1;
+const CGS_GESTURE_PHASE_BEGAN: i64 = 1;
+const CGS_GESTURE_PHASE_CHANGED: i64 = 2;
+const CGS_GESTURE_PHASE_ENDED: i64 = 4;
+const CG_SESSION_EVENT_TAP: u32 = 1;
+const GESTURE_SPEED: f64 = 2000.0;
+// Smallest positive f32 subnormal cast to f64 — empirically makes switching instant (from ISS.c)
+const FLT_TRUE_MIN_AS_F64: f64 = 1.401298464324817e-45_f64;
+
+fn post_dock_swipe(phase: i64, is_right: bool, velocity: f64) {
+    let progress = if is_right { FLT_TRUE_MIN_AS_F64 } else { -FLT_TRUE_MIN_AS_F64 };
+    let vel = if is_right { velocity } else { -velocity };
+
+    unsafe {
+        let ev = CGEventCreate(std::ptr::null());
+        if ev.is_null() {
+            return;
+        }
+        CGEventSetIntegerValueField(ev, FIELD_CGS_EVENT_TYPE, CGS_EVENT_DOCK_CONTROL);
+        CGEventSetIntegerValueField(ev, FIELD_GESTURE_HID_TYPE, IO_HID_EVENT_TYPE_DOCK_SWIPE);
+        CGEventSetIntegerValueField(ev, FIELD_GESTURE_PHASE, phase);
+        CGEventSetDoubleValueField(ev, FIELD_GESTURE_SWIPE_PROGRESS, progress);
+        CGEventSetIntegerValueField(ev, FIELD_GESTURE_SWIPE_MOTION, CGS_GESTURE_MOTION_HORIZONTAL);
+        CGEventSetDoubleValueField(ev, FIELD_GESTURE_SWIPE_VELOCITY_X, vel);
+        CGEventSetDoubleValueField(ev, FIELD_GESTURE_SWIPE_VELOCITY_Y, vel);
+        CGEventPost(CG_SESSION_EVENT_TAP, ev);
+        CFRelease(ev);
+    }
+}
+
+pub fn switch_to_space_instant(target_space_id: u64, display_uuid: &str) {
+    let cid = unsafe { SLSMainConnectionID() };
+
+    let dicts = unsafe {
+        let ptr = NonNull::new_unchecked(SLSCopyManagedDisplaySpaces(cid) as *mut CFArray<CFDict>);
+        CFRetained::from_raw(ptr)
+    };
+
+    let mut current_space_id: Option<u64> = None;
+    let mut ordered_space_ids: Vec<u64> = Vec::new();
+
+    for display in dicts {
+        let uuid = get_value::<CFString>(&display, &CFString::from_static_str("Display Identifier"))
+            .map(|v| v.to_string())
+            .unwrap_or_default();
+
+        if uuid != display_uuid {
+            continue;
+        }
+
+        // Get the display's active space from its "Current Space" dict
+        // Use bare CFDictionary for downcast (ConcreteType is only impl'd for the bare type),
+        // then reinterpret as CFDict (&CFDictionary<CFString, CFType>) for get_value.
+        if let Some(current_dict) = get_value::<CFDictionary>(&display, &CFString::from_static_str("Current Space")) {
+            let current_dict_typed: &CFDict = unsafe {
+                &*(CFRetained::as_ptr(&current_dict).as_ptr() as *const CFDict)
+            };
+            if let Some(id) = get_value::<CFNumber>(current_dict_typed, &CFString::from_static_str("id64")) {
+                current_space_id = Some(id.as_i64().unwrap() as u64);
+            }
+        }
+
+        // Collect ordered space IDs for this display
+        let spaces = get_value_unchecked::<CFArray>(&display, &CFString::from_static_str("Spaces"));
+        for space in unsafe { spaces.cast_unchecked::<CFDict>() } {
+            if let Some(id) = get_value::<CFNumber>(&space, &CFString::from_static_str("id64")) {
+                ordered_space_ids.push(id.as_i64().unwrap() as u64);
+            }
+        }
+
+        break;
+    }
+
+    let Some(current_id) = current_space_id else { return; };
+    if current_id == target_space_id { return; }
+
+    let Some(current_idx) = ordered_space_ids.iter().position(|&id| id == current_id) else { return; };
+    let Some(target_idx) = ordered_space_ids.iter().position(|&id| id == target_space_id) else { return; };
+
+    let is_right = target_idx > current_idx;
+    let hops = target_idx.abs_diff(current_idx);
+    // ISS multiplies velocity by hop count for correct multi-space gesture physics
+    let velocity = GESTURE_SPEED * hops as f64;
+
+    for _ in 0..hops {
+        post_dock_swipe(CGS_GESTURE_PHASE_BEGAN, is_right, velocity);
+        post_dock_swipe(CGS_GESTURE_PHASE_CHANGED, is_right, velocity);
+        post_dock_swipe(CGS_GESTURE_PHASE_ENDED, is_right, velocity);
+    }
+}
+
 pub fn activate_application() {
     let mtm = unsafe { MainThreadMarker::new_unchecked() };
     let app = NSApplication::sharedApplication(mtm);
