@@ -121,6 +121,7 @@ impl App {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Window {
     pub title: String,

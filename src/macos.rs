@@ -88,6 +88,11 @@ unsafe extern "C" {
 
 type CFDict = CFDictionary<CFString, CFType>;
 
+pub struct WindowLocation {
+    pub space_id: u64,
+    pub display_uuid: String,
+}
+
 pub struct WindowInfo {
     pub id: u32,
     pub title: String,
@@ -96,7 +101,7 @@ pub struct WindowInfo {
     pub display_uuid: String,
 }
 
-pub fn get_visible_window_ids() -> Result<HashMap<u32, (u64, String)>> {
+pub fn get_visible_window_ids() -> Result<HashMap<u32, WindowLocation>> {
     let cid = unsafe { SLSMainConnectionID() };
     let dicts = unsafe {
         let ptr = NonNull::new_unchecked(SLSCopyManagedDisplaySpaces(cid) as *mut CFArray<CFDict>);
@@ -108,7 +113,10 @@ pub fn get_visible_window_ids() -> Result<HashMap<u32, (u64, String)>> {
     for display in dicts {
         let display_uuid = get_value::<CFString>(&display, &CFString::from_static_str("Display Identifier"))
             .map(|v| v.to_string())
-            .unwrap_or_default();
+            .unwrap_or_else(|| {
+                eprintln!("[warn] missing Display Identifier in SLSCopyManagedDisplaySpaces dict");
+                String::new()
+            });
 
         let spaces = get_value_unchecked::<CFArray>(&display, &CFString::from_static_str("Spaces"));
 
@@ -138,7 +146,7 @@ pub fn get_visible_window_ids() -> Result<HashMap<u32, (u64, String)>> {
             };
 
             for wid in arr {
-                visible.insert(wid.as_i64().unwrap() as u32, (space_id, display_uuid.clone()));
+                visible.insert(wid.as_i64().unwrap() as u32, WindowLocation { space_id, display_uuid: display_uuid.clone() });
             }
         }
     }
@@ -146,7 +154,7 @@ pub fn get_visible_window_ids() -> Result<HashMap<u32, (u64, String)>> {
     Ok(visible)
 }
 
-pub fn get_window_info_list(visible: &HashMap<u32, (u64, String)>) -> Result<Vec<WindowInfo>> {
+pub fn get_window_info_list(visible: &HashMap<u32, WindowLocation>) -> Result<Vec<WindowInfo>> {
     let Some(window_list) = CGWindowListCopyWindowInfo(Options::ExcludeDesktopElements, NullID)
     else {
         return Err(anyhow!("CGWindowListCopyWindowInfo failed."));
@@ -165,7 +173,7 @@ pub fn get_window_info_list(visible: &HashMap<u32, (u64, String)>) -> Result<Vec
             .as_i64()
             .unwrap() as u32;
 
-        let Some((space_id, display_uuid)) = visible.get(&window_number) else {
+        let Some(loc) = visible.get(&window_number) else {
             continue;
         };
 
@@ -180,8 +188,8 @@ pub fn get_window_info_list(visible: &HashMap<u32, (u64, String)>) -> Result<Vec
             id: window_number,
             title,
             pid,
-            space_id: *space_id,
-            display_uuid: display_uuid.clone(),
+            space_id: loc.space_id,
+            display_uuid: loc.display_uuid.clone(),
         });
     }
 
