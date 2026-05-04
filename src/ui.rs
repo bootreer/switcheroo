@@ -5,6 +5,7 @@ use iced::keyboard::{self, Key, key::Named};
 use iced::widget::{
     center, column, container, image, rich_text, row, scrollable, span, text_input,
 };
+use iced::widget::text::Wrapping;
 use iced::window;
 use iced::{Element, Length, Subscription, Task, Theme, color};
 use nucleo_matcher::{Config, Matcher, Utf32String};
@@ -57,6 +58,17 @@ pub fn update(state: &mut Switcheroo, message: Message) -> Task<Message> {
                 return Task::none();
             }
 
+            const WINDOW_W: f32 = 640.0;
+            const WINDOW_H: f32 = 380.0;
+
+            let position = match crate::macos::active_display_frame_at_cursor() {
+                Some((sx, sy, sw, sh)) => window::Position::Specific(iced::Point::new(
+                    sx + (sw - WINDOW_W) / 2.0,
+                    sy + (sh - WINDOW_H) / 2.0,
+                )),
+                None => window::Position::Centered,
+            };
+
             crate::macos::activate_application();
 
             if let Err(e) = state.manager.refresh() {
@@ -71,8 +83,8 @@ pub fn update(state: &mut Switcheroo, message: Message) -> Task<Message> {
             };
 
             let (id, open_task) = window::open(window::Settings {
-                size: iced::Size::new(800.0, 400.0),
-                position: window::Position::Centered,
+                size: iced::Size::new(WINDOW_W, WINDOW_H),
+                position,
                 decorations: false,
                 transparent: true,
                 level: window::Level::AlwaysOnTop,
@@ -161,8 +173,8 @@ pub fn view(state: &Switcheroo, _window_id: window::Id) -> Element<'_, Message> 
         .id(SEARCH_INPUT_ID)
         .on_input(Message::QueryChanged)
         .on_submit(Message::Confirm)
-        .padding(10)
-        .size(18);
+        .padding([8, 6])
+        .size(15);
 
     let mut result_rows: Vec<Element<'_, Message>> = Vec::new();
 
@@ -189,21 +201,17 @@ pub fn view(state: &Switcheroo, _window_id: window::Id) -> Element<'_, Message> 
                 icon_data.height,
                 icon_data.rgba.clone(),
             ))
-            .width(24)
-            .height(24)
+            .width(20)
+            .height(20)
             .into()
         } else {
-            iced::widget::Space::new().width(24).height(24).into()
+            iced::widget::Space::new().width(20).height(20).into()
         };
 
         // App name with highlighted spans
         let mut app_name_spans: Vec<iced::widget::text::Span<'_>> = Vec::new();
         for (i, ch) in app.name.chars().enumerate() {
-            let c = if indices_set.contains(&i) {
-                highlight_color
-            } else {
-                normal_color
-            };
+            let c = if indices_set.contains(&i) { highlight_color } else { normal_color };
             app_name_spans.push(span(ch.to_string()).color(c));
         }
 
@@ -213,11 +221,7 @@ pub fn view(state: &Switcheroo, _window_id: window::Id) -> Element<'_, Message> 
         let mut title_spans: Vec<iced::widget::text::Span<'_>> = Vec::new();
         let title_len = window.title.chars().count();
         for (i, ch) in window.title.chars().take(max_title_chars).enumerate() {
-            let c = if indices_set.contains(&(i + title_offset)) {
-                highlight_color
-            } else {
-                normal_color
-            };
+            let c = if indices_set.contains(&(i + title_offset)) { highlight_color } else { normal_color };
             title_spans.push(span(ch.to_string()).color(c));
         }
         if title_len > max_title_chars {
@@ -226,25 +230,25 @@ pub fn view(state: &Switcheroo, _window_id: window::Id) -> Element<'_, Message> 
 
         let row_content = row![
             icon_elem,
-            container(rich_text(app_name_spans).size(14)).width(200),
-            container(rich_text(title_spans).size(14)).width(Length::Fill),
+            container(rich_text(app_name_spans).size(13).wrapping(Wrapping::None)).width(150),
+            container(rich_text(title_spans).size(13).wrapping(Wrapping::None)).width(Length::Fill),
         ]
-        .spacing(10)
+        .spacing(8)
         .align_y(iced::Alignment::Center);
 
         let bg_color = if is_selected {
-            color!(0x4682c8)
+            color!(0x2d6de0)
         } else {
             iced::Color::TRANSPARENT
         };
 
         let row_container = container(row_content)
-            .padding([6, 10])
+            .padding([4, 8])
             .width(Length::Fill)
             .style(move |_: &Theme| container::Style {
                 background: Some(iced::Background::Color(bg_color)),
                 border: iced::Border {
-                    radius: 4.0.into(),
+                    radius: 5.0.into(),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -253,22 +257,37 @@ pub fn view(state: &Switcheroo, _window_id: window::Id) -> Element<'_, Message> 
         result_rows.push(row_container.into());
     }
 
-    let results = scrollable(column(result_rows).spacing(2)).height(Length::Fill);
+    let results = scrollable(column(result_rows).spacing(1)).height(Length::Fill);
 
-    let content = column![search, results].spacing(10).padding(20);
+    let separator = container(iced::widget::Space::new().width(Length::Fill).height(0))
+        .width(Length::Fill)
+        .height(1)
+        .style(|_: &Theme| container::Style {
+            background: Some(iced::Background::Color(iced::Color {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 0.08,
+            })),
+            ..Default::default()
+        });
+
+    let content = column![search, separator, results]
+        .spacing(8)
+        .padding([12, 14]);
 
     let main_container = container(content)
         .width(Length::Fill)
         .height(Length::Fill)
         .style(|_: &Theme| container::Style {
             background: Some(iced::Background::Color(iced::Color {
-                r: 0.1,
-                g: 0.1,
-                b: 0.1,
-                a: 0.9,
+                r: 0.10,
+                g: 0.10,
+                b: 0.10,
+                a: 0.93,
             })),
             border: iced::Border {
-                radius: 10.0.into(),
+                radius: 12.0.into(),
                 ..Default::default()
             },
             ..Default::default()

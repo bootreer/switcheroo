@@ -15,10 +15,11 @@ use objc2_core_foundation::{
     CFArray, CFData, CFDictionary, CFNumber, CFRetained, CFString, CFType, CGRect, CGSize,
     ConcreteType,
 };
-use objc2_core_graphics::CGWindowID;
 use objc2_core_graphics::{
-    CGDataProvider, CGError, CGImage, CGWindowListCopyWindowInfo, CGWindowListOption as Options,
-    kCGNullWindowID as NullID, kCGWindowLayer, kCGWindowName, kCGWindowNumber, kCGWindowOwnerPID,
+    CGDataProvider, CGDisplayBounds, CGError, CGEvent, CGEventField, CGEventTapLocation,
+    CGEventType, CGGetActiveDisplayList, CGImage, CGWindowID, CGWindowListCopyWindowInfo,
+    CGWindowListOption as Options, kCGNullWindowID as NullID, kCGWindowLayer, kCGWindowName,
+    kCGWindowNumber, kCGWindowOwnerPID,
 };
 
 // Undocumented internal macos framework
@@ -49,108 +50,101 @@ unsafe extern "C" {
     pub fn SLSGetWindowBounds(cid: u32, wid: CGWindowID, bounds: *mut CGRect) -> CGError;
 }
 
-#[link(name = "CoreGraphics", kind = "framework")]
-unsafe extern "C" {
-    fn CGEventCreate(source: *const c_void) -> *mut c_void;
-    fn CGEventSetIntegerValueField(event: *mut c_void, field: u32, value: i64);
-    fn CGEventSetDoubleValueField(event: *mut c_void, field: u32, value: f64);
-    fn CGEventPost(tap: u32, event: *const c_void);
-}
+// Constants and post_dock_swipe ported from github.com/jurplel/InstantSpaceSwitcher
+// Private CGEventField values and constants
+const FIELD_GESTURE_HID_TYPE: CGEventField = CGEventField(110);
+const FIELD_GESTURE_SWIPE_MOTION: CGEventField = CGEventField(123);
+const FIELD_GESTURE_SWIPE_PROGRESS: CGEventField = CGEventField(124);
+const FIELD_GESTURE_SWIPE_VELOCITY_X: CGEventField = CGEventField(129);
+const FIELD_GESTURE_SWIPE_VELOCITY_Y: CGEventField = CGEventField(130);
+const FIELD_GESTURE_PHASE: CGEventField = CGEventField(132);
 
-#[link(name = "CoreFoundation", kind = "framework")]
-unsafe extern "C" {
-    fn CFRelease(cf: *const c_void);
-}
-
-// Private CGEventField values and constants — sourced from ISS.c
-const FIELD_CGS_EVENT_TYPE: u32 = 55;
-const FIELD_GESTURE_HID_TYPE: u32 = 110;
-const FIELD_GESTURE_SWIPE_MOTION: u32 = 123;
-const FIELD_GESTURE_SWIPE_PROGRESS: u32 = 124;
-const FIELD_GESTURE_SWIPE_VELOCITY_X: u32 = 129;
-const FIELD_GESTURE_SWIPE_VELOCITY_Y: u32 = 130;
-const FIELD_GESTURE_PHASE: u32 = 132;
-
-const CGS_EVENT_DOCK_CONTROL: i64 = 30;
+const CGS_EVENT_DOCK_CONTROL: CGEventType = CGEventType(30);
 const IO_HID_EVENT_TYPE_DOCK_SWIPE: i64 = 23;
 const CGS_GESTURE_MOTION_HORIZONTAL: i64 = 1;
 const CGS_GESTURE_PHASE_BEGAN: i64 = 1;
 const CGS_GESTURE_PHASE_CHANGED: i64 = 2;
 const CGS_GESTURE_PHASE_ENDED: i64 = 4;
-const CG_SESSION_EVENT_TAP: u32 = 1;
 const GESTURE_SPEED: f64 = 2000.0;
-// Smallest positive f32 subnormal cast to f64 — empirically makes switching instant (from ISS.c)
+// Smallest positive f32 subnormal cast to f64
 const FLT_TRUE_MIN_AS_F64: f64 = 1.401298464324817e-45_f64;
 
 fn post_dock_swipe(phase: i64, is_right: bool, velocity: f64) {
-    let progress = if is_right { FLT_TRUE_MIN_AS_F64 } else { -FLT_TRUE_MIN_AS_F64 };
+    let progress = if is_right {
+        FLT_TRUE_MIN_AS_F64
+    } else {
+        -FLT_TRUE_MIN_AS_F64
+    };
     let vel = if is_right { velocity } else { -velocity };
 
-    unsafe {
-        let ev = CGEventCreate(std::ptr::null());
-        if ev.is_null() {
-            return;
-        }
-        CGEventSetIntegerValueField(ev, FIELD_CGS_EVENT_TYPE, CGS_EVENT_DOCK_CONTROL);
-        CGEventSetIntegerValueField(ev, FIELD_GESTURE_HID_TYPE, IO_HID_EVENT_TYPE_DOCK_SWIPE);
-        CGEventSetIntegerValueField(ev, FIELD_GESTURE_PHASE, phase);
-        CGEventSetDoubleValueField(ev, FIELD_GESTURE_SWIPE_PROGRESS, progress);
-        CGEventSetIntegerValueField(ev, FIELD_GESTURE_SWIPE_MOTION, CGS_GESTURE_MOTION_HORIZONTAL);
-        CGEventSetDoubleValueField(ev, FIELD_GESTURE_SWIPE_VELOCITY_X, vel);
-        CGEventSetDoubleValueField(ev, FIELD_GESTURE_SWIPE_VELOCITY_Y, vel);
-        CGEventPost(CG_SESSION_EVENT_TAP, ev);
-        CFRelease(ev);
+    if let Some(ref ev) = CGEvent::new(None) {
+        CGEvent::set_type(Some(ev), CGS_EVENT_DOCK_CONTROL);
+        CGEvent::set_integer_value_field(
+            Some(ev),
+            FIELD_GESTURE_HID_TYPE,
+            IO_HID_EVENT_TYPE_DOCK_SWIPE,
+        );
+        CGEvent::set_integer_value_field(Some(ev), FIELD_GESTURE_PHASE, phase);
+        CGEvent::set_double_value_field(Some(ev), FIELD_GESTURE_SWIPE_PROGRESS, progress);
+        CGEvent::set_integer_value_field(
+            Some(ev),
+            FIELD_GESTURE_SWIPE_MOTION,
+            CGS_GESTURE_MOTION_HORIZONTAL,
+        );
+        CGEvent::set_double_value_field(Some(ev), FIELD_GESTURE_SWIPE_VELOCITY_X, vel);
+        CGEvent::set_double_value_field(Some(ev), FIELD_GESTURE_SWIPE_VELOCITY_Y, vel);
+        CGEvent::post(CGEventTapLocation::SessionEventTap, Some(ev));
     }
 }
 
 pub fn switch_to_space_instant(target_space_id: u64, display_uuid: &str) {
-    let cid = unsafe { SLSMainConnectionID() };
-
-    let dicts = unsafe {
-        let ptr = NonNull::new_unchecked(SLSCopyManagedDisplaySpaces(cid) as *mut CFArray<CFDict>);
-        CFRetained::from_raw(ptr)
-    };
-
     let mut current_space_id: Option<u64> = None;
     let mut ordered_space_ids: Vec<u64> = Vec::new();
 
-    for display in dicts {
-        let uuid = get_value::<CFString>(&display, &CFString::from_static_str("Display Identifier"))
-            .map(|v| v.to_string())
-            .unwrap_or_default();
-
-        if uuid != display_uuid {
+    for display in copy_managed_display_spaces() {
+        if display_uuid_of(&display).as_deref() != Some(display_uuid) {
             continue;
         }
 
-        // Get the display's active space from its "Current Space" dict
-        // Use bare CFDictionary for downcast (ConcreteType is only impl'd for the bare type),
-        // then reinterpret as CFDict (&CFDictionary<CFString, CFType>) for get_value.
-        if let Some(current_dict) = get_value::<CFDictionary>(&display, &CFString::from_static_str("Current Space")) {
-            let current_dict_typed: &CFDict = unsafe {
-                &*(CFRetained::as_ptr(&current_dict).as_ptr() as *const CFDict)
-            };
-            if let Some(id) = get_value::<CFNumber>(current_dict_typed, &CFString::from_static_str("id64")) {
-                current_space_id = Some(id.as_i64().unwrap() as u64);
+        // CFDictionary -> CFDict is phantom-only; cast_unchecked is sound.
+        if let Some(current_dict) =
+            get_value::<CFDictionary>(&display, &CFString::from_static_str("Current Space"))
+        {
+            let current_dict: CFRetained<CFDict> =
+                unsafe { CFRetained::cast_unchecked(current_dict) };
+            if let Some(id) =
+                get_value::<CFNumber>(&current_dict, &CFString::from_static_str("id64"))
+            {
+                if let Some(v) = id.as_i64() { current_space_id = Some(v as u64); }
             }
         }
 
-        // Collect ordered space IDs for this display
         let spaces = get_value_unchecked::<CFArray>(&display, &CFString::from_static_str("Spaces"));
         for space in unsafe { spaces.cast_unchecked::<CFDict>() } {
             if let Some(id) = get_value::<CFNumber>(&space, &CFString::from_static_str("id64")) {
-                ordered_space_ids.push(id.as_i64().unwrap() as u64);
+                if let Some(v) = id.as_i64() { ordered_space_ids.push(v as u64); }
             }
         }
 
         break;
     }
 
-    let Some(current_id) = current_space_id else { return; };
-    if current_id == target_space_id { return; }
+    let Some(current_id) = current_space_id else {
+        return;
+    };
+    if current_id == target_space_id {
+        return;
+    }
 
-    let Some(current_idx) = ordered_space_ids.iter().position(|&id| id == current_id) else { return; };
-    let Some(target_idx) = ordered_space_ids.iter().position(|&id| id == target_space_id) else { return; };
+    let Some(current_idx) = ordered_space_ids.iter().position(|&id| id == current_id) else {
+        return;
+    };
+    let Some(target_idx) = ordered_space_ids
+        .iter()
+        .position(|&id| id == target_space_id)
+    else {
+        return;
+    };
 
     let is_right = target_idx > current_idx;
     let hops = target_idx.abs_diff(current_idx);
@@ -174,6 +168,27 @@ pub fn hide_application() {
     let mtm = unsafe { MainThreadMarker::new_unchecked() };
     let app = NSApplication::sharedApplication(mtm);
     app.hide(None);
+}
+
+/// Returns (x, y, width, height) of the display containing the cursor,
+/// in the global display coordinate space (top-left of primary display is origin, Y downward).
+pub fn active_display_frame_at_cursor() -> Option<(f32, f32, f32, f32)> {
+    let ev = CGEvent::new(None)?;
+    let loc = CGEvent::location(Some(&ev));
+
+    let mut displays = [0u32; 16];
+    let mut count = 0u32;
+    if unsafe { CGGetActiveDisplayList(16, displays.as_mut_ptr(), &mut count) } != CGError(0) {
+        return None;
+    }
+    for &display in &displays[..count as usize] {
+        let b = CGDisplayBounds(display);
+        let (x, y, w, h) = (b.origin.x, b.origin.y, b.size.width, b.size.height);
+        if loc.x >= x && loc.x < x + w && loc.y >= y && loc.y < y + h {
+            return Some((x as f32, y as f32, w as f32, h as f32));
+        }
+    }
+    None
 }
 
 pub fn set_accessory_mode() {
@@ -203,9 +218,22 @@ unsafe extern "C" {
 
 type CFDict = CFDictionary<CFString, CFType>;
 
+fn copy_managed_display_spaces() -> CFRetained<CFArray<CFDict>> {
+    let cid = unsafe { SLSMainConnectionID() };
+    unsafe {
+        let ptr = NonNull::new_unchecked(SLSCopyManagedDisplaySpaces(cid) as *mut CFArray<CFDict>);
+        CFRetained::from_raw(ptr)
+    }
+}
+
+fn display_uuid_of(display: &CFDict) -> Option<String> {
+    get_value::<CFString>(display, &CFString::from_static_str("Display Identifier"))
+        .map(|v| v.to_string())
+}
+
 pub struct WindowLocation {
     pub space_id: u64,
-    pub display_uuid: String,
+    pub display_uuid: Option<String>,
 }
 
 pub struct WindowInfo {
@@ -213,31 +241,24 @@ pub struct WindowInfo {
     pub title: String,
     pub pid: i32,
     pub space_id: u64,
-    pub display_uuid: String,
+    pub display_uuid: Option<String>,
 }
 
 pub fn get_visible_window_ids() -> Result<HashMap<u32, WindowLocation>> {
     let cid = unsafe { SLSMainConnectionID() };
-    let dicts = unsafe {
-        let ptr = NonNull::new_unchecked(SLSCopyManagedDisplaySpaces(cid) as *mut CFArray<CFDict>);
-        CFRetained::from_raw(ptr)
-    };
-
     let mut visible = HashMap::new();
 
-    for display in dicts {
-        let display_uuid = get_value::<CFString>(&display, &CFString::from_static_str("Display Identifier"))
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| {
-                eprintln!("[warn] missing Display Identifier in SLSCopyManagedDisplaySpaces dict");
-                String::new()
-            });
+    for display in copy_managed_display_spaces() {
+        let display_uuid = display_uuid_of(&display);
+        if display_uuid.is_none() {
+            eprintln!("[warn] missing Display Identifier in SLSCopyManagedDisplaySpaces dict");
+        }
 
         let spaces = get_value_unchecked::<CFArray>(&display, &CFString::from_static_str("Spaces"));
 
         for space in unsafe { spaces.cast_unchecked::<CFDict>() } {
             let id = get_value_unchecked::<CFNumber>(&space, &CFString::from_static_str("id64"));
-            let space_id = id.as_i64().unwrap() as u64;
+            let Some(space_id) = id.as_i64().map(|v| v as u64) else { continue };
 
             let options = 0x2;
             let mut set_tags: u64 = 0;
@@ -261,7 +282,15 @@ pub fn get_visible_window_ids() -> Result<HashMap<u32, WindowLocation>> {
             };
 
             for wid in arr {
-                visible.insert(wid.as_i64().unwrap() as u32, WindowLocation { space_id, display_uuid: display_uuid.clone() });
+                if let Some(wid) = wid.as_i64() {
+                    visible.insert(
+                        wid as u32,
+                        WindowLocation {
+                            space_id,
+                            display_uuid: display_uuid.clone(),
+                        },
+                    );
+                }
             }
         }
     }
@@ -472,6 +501,7 @@ pub struct IconData {
     pub height: u32,
 }
 
+// TODO: why not just render the CGImage?
 pub fn ns_image_to_rgba(image: &NSImage) -> Option<IconData> {
     image.setSize(CGSize::new(16., 16.));
 

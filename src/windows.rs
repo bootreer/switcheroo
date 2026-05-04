@@ -127,13 +127,17 @@ pub struct Window {
     pub title: String,
     pub id: u32,
     pub space_id: u64,
-    pub display_uuid: String,
+    pub display_uuid: Option<String>,
     ax_element: Retained<AXUIElement>,
 }
 
 impl Window {
     pub fn focus(&self, app: &NSRunningApplication) -> Result<()> {
-        macos::switch_to_space_instant(self.space_id, &self.display_uuid);
+        if let Some(uuid) = self.display_uuid.as_deref() {
+            macos::switch_to_space_instant(self.space_id, uuid);
+        } else {
+            eprintln!("[warn] window {} has no display UUID; skipping space switch", self.id);
+        }
 
         let pid = app.processIdentifier();
         let mut psn = ProcessSerialNumber::default();
