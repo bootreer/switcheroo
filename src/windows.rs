@@ -25,8 +25,7 @@ impl Manager {
     }
 
     pub fn refresh(&mut self) -> Result<()> {
-        let visible =
-            macos::get_visible_window_ids().context("Failed to get visible window IDs")?;
+        let visible = macos::get_visible_window_ids();
         let window_infos =
             macos::get_window_info_list(&visible).context("Failed to get window info list")?;
 
@@ -92,7 +91,7 @@ impl Manager {
         Ok(())
     }
 
-    pub fn app_map(&self) -> &HashMap<i32, App> {
+    pub const fn app_map(&self) -> &HashMap<i32, App> {
         &self.app_map
     }
 
@@ -136,7 +135,10 @@ impl Window {
         if let Some(uuid) = self.display_uuid.as_deref() {
             macos::switch_to_space_instant(self.space_id, uuid);
         } else {
-            eprintln!("[warn] window {} has no display UUID; skipping space switch", self.id);
+            eprintln!(
+                "[warn] window {} has no display UUID; skipping space switch",
+                self.id
+            );
         }
 
         let pid = app.processIdentifier();

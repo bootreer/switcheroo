@@ -9,7 +9,6 @@ use anyhow::{Result, anyhow};
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSImage};
-#[allow(deprecated)]
 use objc2_application_services::{AXError, AXUIElement};
 use objc2_core_foundation::{
     CFArray, CFData, CFDictionary, CFNumber, CFRetained, CFString, CFType, CGRect, CGSize,
@@ -114,15 +113,18 @@ pub fn switch_to_space_instant(target_space_id: u64, display_uuid: &str) {
                 unsafe { CFRetained::cast_unchecked(current_dict) };
             if let Some(id) =
                 get_value::<CFNumber>(&current_dict, &CFString::from_static_str("id64"))
+                && let Some(v) = id.as_i64()
             {
-                if let Some(v) = id.as_i64() { current_space_id = Some(v as u64); }
+                current_space_id = Some(v as u64);
             }
         }
 
         let spaces = get_value_unchecked::<CFArray>(&display, &CFString::from_static_str("Spaces"));
         for space in unsafe { spaces.cast_unchecked::<CFDict>() } {
-            if let Some(id) = get_value::<CFNumber>(&space, &CFString::from_static_str("id64")) {
-                if let Some(v) = id.as_i64() { ordered_space_ids.push(v as u64); }
+            if let Some(id) = get_value::<CFNumber>(&space, &CFString::from_static_str("id64"))
+                && let Some(v) = id.as_i64()
+            {
+                ordered_space_ids.push(v as u64);
             }
         }
 
@@ -244,7 +246,7 @@ pub struct WindowInfo {
     pub display_uuid: Option<String>,
 }
 
-pub fn get_visible_window_ids() -> Result<HashMap<u32, WindowLocation>> {
+pub fn get_visible_window_ids() -> HashMap<u32, WindowLocation> {
     let cid = unsafe { SLSMainConnectionID() };
     let mut visible = HashMap::new();
 
@@ -258,7 +260,9 @@ pub fn get_visible_window_ids() -> Result<HashMap<u32, WindowLocation>> {
 
         for space in unsafe { spaces.cast_unchecked::<CFDict>() } {
             let id = get_value_unchecked::<CFNumber>(&space, &CFString::from_static_str("id64"));
-            let Some(space_id) = id.as_i64().map(|v| v as u64) else { continue };
+            let Some(space_id) = id.as_i64().map(|v| v as u64) else {
+                continue;
+            };
 
             let options = 0x2;
             let mut set_tags: u64 = 0;
@@ -295,7 +299,7 @@ pub fn get_visible_window_ids() -> Result<HashMap<u32, WindowLocation>> {
         }
     }
 
-    Ok(visible)
+    visible
 }
 
 pub fn get_window_info_list(visible: &HashMap<u32, WindowLocation>) -> Result<Vec<WindowInfo>> {
@@ -381,7 +385,7 @@ fn get_value_unchecked<T: ConcreteType>(
     dict: &CFDictionary<CFString, CFType>,
     value: &CFString,
 ) -> CFRetained<T> {
-    get_value(dict, value).unwrap_or_else(|| panic!("{} not found", value))
+    get_value(dict, value).unwrap_or_else(|| panic!("{value} not found"))
 }
 
 pub fn make_key_window(id: u32, psn: &ProcessSerialNumber) -> CGError {
