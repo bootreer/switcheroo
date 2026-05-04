@@ -10,4 +10,5 @@ Accessibility and Screen/System Audio Recording need to enabled to function.
 
 ## acknowledgements
 - [Alt-Tab](https://github.com/lwouis/alt-tab-macos) and [yabai](https://github.com/asmvik/yabai) for documenting private macOS apis, as well as inspiration for a lot of the core logic
+- The space switching logic was ported over from [InstantSpaceSwitcher](https://github.com/jurplel/InstantSpaceSwitcher)
 - [Apple](https://en.wikipedia.org/wiki/Criticism_of_Apple_Inc.) for making my life very difficult
