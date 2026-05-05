@@ -16,7 +16,7 @@ use objc2_core_foundation::{
 };
 use objc2_core_graphics::{
     CGDataProvider, CGDisplayBounds, CGError, CGEvent, CGEventField, CGEventTapLocation,
-    CGEventType, CGGetActiveDisplayList, CGImage, CGWindowID, CGWindowListCopyWindowInfo,
+    CGEventType, CGGetDisplaysWithPoint, CGImage, CGWindowID, CGWindowListCopyWindowInfo,
     CGWindowListOption as Options, kCGNullWindowID as NullID, kCGWindowLayer, kCGWindowName,
     kCGWindowNumber, kCGWindowOwnerPID,
 };
@@ -178,19 +178,16 @@ pub fn active_display_frame_at_cursor() -> Option<(f32, f32, f32, f32)> {
     let ev = CGEvent::new(None)?;
     let loc = CGEvent::location(Some(&ev));
 
-    let mut displays = [0u32; 16];
+    let mut display = 0u32;
     let mut count = 0u32;
-    if unsafe { CGGetActiveDisplayList(16, displays.as_mut_ptr(), &mut count) } != CGError(0) {
+    unsafe { CGGetDisplaysWithPoint(loc, 1, &mut display, &mut count) };
+
+    if count == 0 {
         return None;
     }
-    for &display in &displays[..count as usize] {
-        let b = CGDisplayBounds(display);
-        let (x, y, w, h) = (b.origin.x, b.origin.y, b.size.width, b.size.height);
-        if loc.x >= x && loc.x < x + w && loc.y >= y && loc.y < y + h {
-            return Some((x as f32, y as f32, w as f32, h as f32));
-        }
-    }
-    None
+
+    let b = CGDisplayBounds(display);
+    Some((b.origin.x as f32, b.origin.y as f32, b.size.width as f32, b.size.height as f32))
 }
 
 pub fn set_accessory_mode() {

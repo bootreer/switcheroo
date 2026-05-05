@@ -120,7 +120,6 @@ impl App {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Window {
     pub title: String,
@@ -132,6 +131,22 @@ pub struct Window {
 
 impl Window {
     pub fn focus(&self, app: &NSRunningApplication) -> Result<()> {
+        let cid = unsafe { macos::SLSMainConnectionID() };
+        let mut rect = std::mem::MaybeUninit::<CGRect>::uninit();
+        let bounds = unsafe {
+            let res = macos::SLSGetWindowBounds(cid, self.id, rect.as_mut_ptr());
+            if res != CGError::Success {
+                return Err(anyhow!("Could not get window bounds"));
+            }
+            rect.assume_init()
+        };
+
+        let center = CGPoint::new(
+            bounds.origin.x + bounds.size.width / 2.,
+            bounds.origin.y + bounds.size.height / 2.,
+        );
+        CGWarpMouseCursorPosition(center);
+
         if let Some(uuid) = self.display_uuid.as_deref() {
             macos::switch_to_space_instant(self.space_id, uuid);
         } else {
@@ -164,22 +179,6 @@ impl Window {
         unsafe {
             AXUIElement::perform_action(&self.ax_element, &CFString::from_static_str("AXRaise"))
         };
-
-        let cid = unsafe { macos::SLSMainConnectionID() };
-        let mut rect = std::mem::MaybeUninit::<CGRect>::uninit();
-        let bounds = unsafe {
-            let res = macos::SLSGetWindowBounds(cid, self.id, rect.as_mut_ptr());
-            if res != CGError::Success {
-                return Err(anyhow!("Could not get window bounds"));
-            }
-            rect.assume_init()
-        };
-
-        let center = CGPoint::new(
-            bounds.origin.x + bounds.size.width / 2.,
-            bounds.origin.y + bounds.size.height / 2.,
-        );
-        CGWarpMouseCursorPosition(center);
 
         Ok(())
     }
