@@ -149,6 +149,14 @@ impl Window {
 
         if let Some(uuid) = self.display_uuid.as_deref() {
             macos::switch_to_space_instant(self.space_id, uuid);
+            let deadline =
+                std::time::Instant::now() + std::time::Duration::from_millis(200);
+            while std::time::Instant::now() < deadline {
+                if unsafe { macos::SLSGetActiveSpace(cid) } == self.space_id {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
         } else {
             eprintln!(
                 "[warn] window {} has no display UUID; skipping space switch",

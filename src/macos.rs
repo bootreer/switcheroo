@@ -235,6 +235,7 @@ pub struct WindowLocation {
     pub display_uuid: Option<String>,
 }
 
+#[derive(Debug)]
 pub struct WindowInfo {
     pub id: u32,
     pub title: String,
@@ -350,7 +351,7 @@ pub fn resolve_ax_for_pid(
     let mut result = HashMap::new();
     let mut remaining: HashSet<u32> = target_wids.clone();
 
-    for id in 0..100u64 {
+    for id in 0..1000u64 {
         if remaining.is_empty() {
             break;
         }
@@ -431,26 +432,6 @@ fn ax_request(buffer: &mut [u8; 20], id: u64) -> *mut AXUIElement {
     }
 }
 
-pub fn get_ax_element(wid: u32, pid: i32) -> Option<Retained<AXUIElement>> {
-    let mut buffer = init_ax_buffer(pid);
-    let mut cg_id = 0;
-
-    for id in 0..100u64 {
-        let ptr = ax_request(&mut buffer, id);
-        if !ptr.is_null() {
-            let element = unsafe { Retained::from_raw(ptr).unwrap() };
-            if unsafe { _AXUIElementGetWindow(ptr as _, &mut cg_id) } != AXError::Success {
-                continue;
-            }
-
-            if cg_id == wid {
-                return Some(element);
-            }
-        }
-    }
-    None
-}
-
 pub fn pid_from_ax(element: &AXUIElement) -> Option<u32> {
     let mut cg_id = 0;
     if unsafe { _AXUIElementGetWindow((element as *const _) as _, &mut cg_id) } != AXError::Success
@@ -487,13 +468,6 @@ pub fn get_attribute(element: &AXUIElement, attr: &str) -> Option<CFRetained<CFT
         return None;
     }
     Some(unsafe { CFRetained::from_raw(NonNull::new(ptr as *mut CFType)?) })
-}
-
-#[allow(dead_code)]
-fn focus_ax(wid: u32, pid: i32) {
-    if let Some(el) = get_ax_element(wid, pid) {
-        unsafe { AXUIElement::perform_action(&el, &CFString::from_static_str("AXRaise")) };
-    }
 }
 
 pub struct IconData {

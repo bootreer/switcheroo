@@ -151,6 +151,7 @@ pub fn update(state: &mut Switcheroo, message: Message) -> Task<Message> {
             if let Some(id) = state.picker_window.take() {
                 state.query.clear();
                 state.selected = None;
+                crate::macos::hide_application();
                 window::close(id)
             } else {
                 Task::none()
