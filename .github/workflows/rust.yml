@@ -1,0 +1,28 @@
+name: build my guy
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-bundle
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-bundle
+      - name: Build
+        run: cargo build --release
+      - name: Bundle release
+        run: cargo bundle --release
+      - name: Upload bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: app-bundle
+          path: target/release/bundle/osx/
