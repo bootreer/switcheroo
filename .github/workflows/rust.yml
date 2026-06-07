@@ -21,8 +21,12 @@ jobs:
         run: cargo build --release
       - name: Bundle release
         run: cargo bundle --release
+      - name: Re-sign and archive
+        run: |
+          codesign --force --deep --sign - target/release/bundle/osx/switcheroo.app
+          ditto -c -k --keepParent target/release/bundle/osx/switcheroo.app switcheroo.app.zip
       - name: Upload bundle
         uses: actions/upload-artifact@v7
         with:
           name: switcheroo
-          path: target/release/bundle/osx/
+          path: switcheroo.app.zip

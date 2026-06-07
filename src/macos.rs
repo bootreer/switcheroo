@@ -1,4 +1,5 @@
 use std::ffi::c_void;
+use std::time::{Duration, Instant};
 use std::{
     collections::{HashMap, HashSet},
     ptr::NonNull,
@@ -351,11 +352,17 @@ pub fn resolve_ax_for_pid(
     let mut result = HashMap::new();
     let mut remaining: HashSet<u32> = target_wids.clone();
 
-    for id in 0..1000u64 {
-        if remaining.is_empty() {
-            break;
-        }
+    // AX element IDs are per-process and indexed over all elements (not just windows),
+    // some apps (Chrome with many windows, Ghostty) push window IDs well past any small cap.
+    // => bound by wall-clock instead, scaled by how many windows we need to
+    // find: small lookups *should* stay snappy, large ones get room to complete.
+    let budget = Duration::from_millis((50 + 25 * target_wids.len() as u64).min(500));
+    let deadline = Instant::now() + budget;
+
+    let mut id = 0u64;
+    while !remaining.is_empty() && Instant::now() < deadline {
         let ptr = ax_request(&mut buffer, id);
+        id += 1;
         if !ptr.is_null() {
             let element = unsafe { Retained::from_raw(ptr).unwrap() };
             if unsafe { _AXUIElementGetWindow(ptr as _, &mut cg_w_id) } != AXError::Success {
