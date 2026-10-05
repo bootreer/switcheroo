@@ -347,15 +347,64 @@ pub fn resolve_ax_for_pid(
     pid: i32,
     target_wids: &HashSet<u32>,
 ) -> HashMap<u32, Retained<AXUIElement>> {
-    let mut buffer = init_ax_buffer(pid);
     let mut cg_w_id = 0;
     let mut result = HashMap::new();
     let mut remaining: HashSet<u32> = target_wids.clone();
 
-    // AX element IDs are per-process and indexed over all elements (not just windows),
-    // some apps (Chrome with many windows, Ghostty) push window IDs well past any small cap.
-    // => bound by wall-clock instead, scaled by how many windows we need to
-    // find: small lookups *should* stay snappy, large ones get room to complete.
+    // Fast path 1: ask the application AX element for its window list
+    // Note: AXWindows only covers the current Space and macOS sometimes
+    // returns a stale or empty list, so it is a fast path, not the truth.
+    if let Some(windows) = ax_windows_for_pid(pid) {
+        for element in unsafe { windows.cast_unchecked::<AXUIElement>() } {
+            if remaining.is_empty() {
+                break;
+            }
+            if unsafe {
+                _AXUIElementGetWindow(&*element as *const AXUIElement as _, &mut cg_w_id)
+            } != AXError::Success
+            {
+                continue;
+            }
+            if remaining.contains(&cg_w_id) && is_window(&element) {
+                remaining.remove(&cg_w_id);
+                result.insert(cg_w_id, element.into());
+            }
+        }
+    }
+
+    // Fast path 2: some apps (Electron/Slack, SwiftUI terminals like Ghostty)
+    // report an empty or stale AXWindows list even while windows exist, but
+    // do answer AXFocusedWindow/AXMainWindow with the live window element.
+    // Each refresh catches whichever window is active; the caller's cache
+    // accumulates the rest across refreshes.
+    if !remaining.is_empty() {
+        let app = unsafe { AXUIElement::new_application(pid) };
+        for attr in ["AXFocusedWindow", "AXMainWindow"] {
+            if remaining.is_empty() {
+                break;
+            }
+            let Some(value) = get_attribute(&app, attr) else {
+                continue;
+            };
+            let Ok(element) = value.downcast::<AXUIElement>() else {
+                continue;
+            };
+            let Some(wid) = pid_from_ax(&element) else {
+                continue;
+            };
+            if remaining.contains(&wid) && is_window(&element) {
+                remaining.remove(&wid);
+                result.insert(wid, element.into());
+            }
+        }
+    }
+
+    if remaining.is_empty() {
+        return result;
+    }
+
+    // Brute-force fallback
+    let mut buffer = init_ax_buffer(pid);
     let budget = Duration::from_millis((50 + 25 * target_wids.len() as u64).min(500));
     let deadline = Instant::now() + budget;
 
@@ -379,6 +428,18 @@ pub fn resolve_ax_for_pid(
     result
 }
 
+fn ax_windows_for_pid(pid: i32) -> Option<CFRetained<CFArray>> {
+    let app = unsafe { AXUIElement::new_application(pid) };
+    let attr = CFString::from_static_str("AXWindows");
+    let mut ptr: *const CFType = std::ptr::null();
+    let res = unsafe { app.copy_attribute_value(&attr, NonNull::new_unchecked(&mut ptr)) };
+    if res != AXError::Success {
+        eprintln!("[ax] AXWindows lookup failed for pid {pid}: {res:#?}");
+        return None;
+    }
+    let value = unsafe { CFRetained::from_raw(NonNull::new(ptr as *mut CFType)?) };
+    value.downcast::<CFArray>().ok()
+}
 fn get_value<T: ConcreteType>(
     dict: &CFDictionary<CFString, CFType>,
     value: &CFString,

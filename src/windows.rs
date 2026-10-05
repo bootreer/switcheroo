@@ -74,15 +74,14 @@ impl Manager {
         }
 
         for info in window_infos {
-            if let Some(ax_element) = self.ax_cache.get(&info.id)
-                && let Some(app) = new_app_map.get_mut(&info.pid)
-            {
+            if let Some(app) = new_app_map.get_mut(&info.pid) {
+                let ax_element = self.ax_cache.get(&info.id).cloned();
                 app.windows.push(Window {
                     title: info.title,
                     id: info.id,
                     space_id: info.space_id,
                     display_uuid: info.display_uuid,
-                    ax_element: ax_element.clone(),
+                    ax_element,
                 });
             }
         }
@@ -126,7 +125,7 @@ pub struct Window {
     pub id: u32,
     pub space_id: u64,
     pub display_uuid: Option<String>,
-    ax_element: Retained<AXUIElement>,
+    ax_element: Option<Retained<AXUIElement>>,
 }
 
 impl Window {
@@ -184,9 +183,11 @@ impl Window {
             return Err(anyhow!("Failed at setting key window."));
         }
 
-        unsafe {
-            AXUIElement::perform_action(&self.ax_element, &CFString::from_static_str("AXRaise"))
-        };
+        if let Some(ax_element) = &self.ax_element {
+            unsafe {
+                AXUIElement::perform_action(ax_element, &CFString::from_static_str("AXRaise"))
+            };
+        }
 
         Ok(())
     }

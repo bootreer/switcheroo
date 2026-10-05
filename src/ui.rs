@@ -2,10 +2,10 @@ use std::collections::HashSet;
 
 use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
 use iced::keyboard::{self, Key, key::Named};
+use iced::widget::text::Wrapping;
 use iced::widget::{
     center, column, container, image, rich_text, row, scrollable, span, text_input,
 };
-use iced::widget::text::Wrapping;
 use iced::window;
 use iced::{Element, Length, Subscription, Task, Theme, color};
 use nucleo_matcher::{Config, Matcher, Utf32String};
@@ -212,7 +212,11 @@ pub fn view(state: &Switcheroo, _window_id: window::Id) -> Element<'_, Message> 
         // App name with highlighted spans
         let mut app_name_spans: Vec<iced::widget::text::Span<'_>> = Vec::new();
         for (i, ch) in app.name.chars().enumerate() {
-            let c = if indices_set.contains(&i) { highlight_color } else { normal_color };
+            let c = if indices_set.contains(&i) {
+                highlight_color
+            } else {
+                normal_color
+            };
             app_name_spans.push(span(ch.to_string()).color(c));
         }
 
@@ -222,7 +226,11 @@ pub fn view(state: &Switcheroo, _window_id: window::Id) -> Element<'_, Message> 
         let mut title_spans: Vec<iced::widget::text::Span<'_>> = Vec::new();
         let title_len = window.title.chars().count();
         for (i, ch) in window.title.chars().take(max_title_chars).enumerate() {
-            let c = if indices_set.contains(&(i + title_offset)) { highlight_color } else { normal_color };
+            let c = if indices_set.contains(&(i + title_offset)) {
+                highlight_color
+            } else {
+                normal_color
+            };
             title_spans.push(span(ch.to_string()).color(c));
         }
         if title_len > max_title_chars {
