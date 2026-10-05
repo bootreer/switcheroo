@@ -78,8 +78,6 @@ impl Manager {
             let ax_element = match self.ax_cache.get(&info.id) {
                 Some(macos::AxEntry::Switchable(element)) => Some(element.clone()),
                 Some(macos::AxEntry::Rejected(_)) => continue,
-                // Unresolved and untitled: e.g. the toolbar strip of a fullscreen window
-                None if info.title.is_empty() => continue,
                 None => None,
             };
             if let Some(app) = new_app_map.get_mut(&info.pid) {

@@ -10,14 +10,17 @@ use anyhow::{Result, anyhow};
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSImage};
-use objc2_application_services::{AXError, AXUIElement};
+use objc2_application_services::{
+    AXError, AXIsProcessTrustedWithOptions, AXUIElement, kAXTrustedCheckOptionPrompt,
+};
 use objc2_core_foundation::{
-    CFArray, CFData, CFDictionary, CFNumber, CFRetained, CFString, CFType, CGRect, CGSize,
-    ConcreteType,
+    CFArray, CFBoolean, CFData, CFDictionary, CFNumber, CFRetained, CFString, CFType, CGRect,
+    CGSize, ConcreteType,
 };
 use objc2_core_graphics::{
     CGDataProvider, CGDisplayBounds, CGError, CGEvent, CGEventField, CGEventTapLocation,
-    CGEventType, CGGetDisplaysWithPoint, CGImage, CGWindowID, CGWindowListCopyWindowInfo,
+    CGEventType, CGGetDisplaysWithPoint, CGImage, CGPreflightScreenCaptureAccess,
+    CGRequestScreenCaptureAccess, CGWindowID, CGWindowListCopyWindowInfo,
     CGWindowListOption as Options, kCGNullWindowID as NullID, kCGWindowLayer, kCGWindowName,
     kCGWindowNumber, kCGWindowOwnerPID,
 };
@@ -332,9 +335,13 @@ pub fn get_window_info_list(visible: &HashMap<u32, WindowLocation>) -> Result<Ve
         let pid = get_value_unchecked::<CFNumber>(&dict, unsafe { kCGWindowOwnerPID })
             .as_i32()
             .unwrap();
-        let title = get_value::<CFString>(&dict, unsafe { kCGWindowName })
+        // Untitled = helper window (e.g. fullscreen toolbar strip)
+        let Some(title) = get_value::<CFString>(&dict, unsafe { kCGWindowName })
             .map(|v| v.to_string())
-            .unwrap_or_default();
+            .filter(|t| !t.is_empty())
+        else {
+            continue;
+        };
 
         result.push(WindowInfo {
             id: window_number,
@@ -601,4 +608,36 @@ pub fn ns_image_to_rgba(image: &NSImage) -> Option<IconData> {
         width,
         height,
     })
+}
+
+/// Requests Accessibility and Screen Recording (for titles), opening Settings for any missing
+pub fn request_permissions() -> bool {
+    let prompt = CFDictionary::from_slices(
+        &[unsafe { kAXTrustedCheckOptionPrompt }],
+        &[CFBoolean::new(true)],
+    );
+    let accessibility = unsafe { AXIsProcessTrustedWithOptions(Some(prompt.as_opaque())) };
+    let screen_recording = CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess();
+
+    for (granted, name, pane) in [
+        (accessibility, "Accessibility", "Privacy_Accessibility"),
+        (
+            screen_recording,
+            "Screen Recording",
+            "Privacy_ScreenCapture",
+        ),
+    ] {
+        if granted {
+            continue;
+        }
+        log::error!(
+            "{name} permission is required: grant it in System Settings, then relaunch switcheroo"
+        );
+        let url = format!("x-apple.systempreferences:com.apple.preference.security?{pane}");
+        if let Err(e) = std::process::Command::new("open").arg(url).status() {
+            log::error!("failed to open System Settings: {e}");
+        }
+    }
+
+    accessibility && screen_recording
 }
