@@ -257,7 +257,7 @@ pub fn get_visible_window_ids() -> HashMap<u32, WindowLocation> {
     for display in copy_managed_display_spaces() {
         let display_uuid = display_uuid_of(&display);
         if display_uuid.is_none() {
-            eprintln!("[warn] missing Display Identifier in SLSCopyManagedDisplaySpaces dict");
+            log::warn!("missing Display Identifier in SLSCopyManagedDisplaySpaces dict");
         }
 
         let spaces = get_value_unchecked::<CFArray>(&display, &CFString::from_static_str("Spaces"));
@@ -380,7 +380,7 @@ pub fn resolve_ax_for_pid(pid: i32, target_wids: &HashSet<u32>) -> HashMap<u32, 
         let entry = if is_switchable_subrole(&subrole) {
             AxEntry::Switchable(element)
         } else {
-            eprintln!("[ax] hiding window {wid} (pid {pid}): subrole {subrole}");
+            log::debug!("hiding window {wid} (pid {pid}): subrole {subrole}");
             AxEntry::Rejected(element)
         };
         result.insert(wid, entry);
@@ -521,7 +521,7 @@ pub fn get_attribute<T: ConcreteType>(element: &AXUIElement, attr: &str) -> Opti
     let attr = CFString::from_str(attr);
     let res = unsafe { element.copy_attribute_value(&attr, NonNull::new_unchecked(&mut ptr)) };
     if res != AXError::Success {
-        eprintln!("AXUIElement::copy_attribute_value failed with {res:#?}");
+        log::trace!("copy_attribute_value({attr}) failed with {res:?}");
         return None;
     }
     let value = unsafe { CFRetained::from_raw(NonNull::new(ptr as *mut CFType)?) };
@@ -542,7 +542,7 @@ pub fn ns_image_to_rgba(image: &NSImage) -> Option<IconData> {
         unsafe { image.CGImageForProposedRect_context_hints(std::ptr::null_mut(), None, None) };
 
     if cg_image.is_none() {
-        eprintln!("[icon] CGImageForProposedRect returned None");
+        log::warn!("CGImageForProposedRect returned None");
         return None;
     }
 
@@ -591,7 +591,7 @@ pub fn ns_image_to_rgba(image: &NSImage) -> Option<IconData> {
             rgba
         }
         other => {
-            eprintln!("[icon] Unsupported bits_per_pixel: {other}");
+            log::warn!("unsupported icon bits_per_pixel: {other}");
             return None;
         }
     };

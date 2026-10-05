@@ -9,6 +9,8 @@ mod ui;
 mod windows;
 
 fn main() -> iced::Result {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+
     unsafe {
         let system_wide = AXUIElement::new_system_wide();
         AXUIElement::set_messaging_timeout(&system_wide, 0.5);

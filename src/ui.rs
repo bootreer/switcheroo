@@ -72,7 +72,7 @@ pub fn update(state: &mut Switcheroo, message: Message) -> Task<Message> {
             crate::macos::activate_application();
 
             if let Err(e) = state.manager.refresh() {
-                eprintln!("Failed to refresh windows: {e}");
+                log::error!("Failed to refresh windows: {e}");
             }
             state.query.clear();
             state.filtered_count = get_filtered_items(state).len();

@@ -163,8 +163,8 @@ impl Window {
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
         } else {
-            eprintln!(
-                "[warn] window {} has no display UUID; skipping space switch",
+            log::warn!(
+                "window {} has no display UUID; skipping space switch",
                 self.id
             );
         }
