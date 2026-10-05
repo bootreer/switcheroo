@@ -13,7 +13,7 @@ use objc2_core_graphics::{CGError, CGWarpMouseCursorPosition};
 #[derive(Default)]
 pub struct Manager {
     app_map: HashMap<i32, App>,
-    ax_cache: HashMap<u32, Retained<AXUIElement>>,
+    ax_cache: HashMap<u32, macos::AxEntry>,
     icon_cache: HashMap<i32, macos::IconData>,
 }
 
@@ -59,6 +59,7 @@ impl Manager {
         }
 
         self.ax_cache.retain(|wid, _| active_wids.contains(wid));
+        self.ax_cache.values_mut().for_each(macos::AxEntry::recheck);
         self.icon_cache.retain(|pid, _| active_pids.contains(pid));
 
         let mut uncached_by_pid: HashMap<i32, HashSet<u32>> = HashMap::new();
@@ -74,8 +75,14 @@ impl Manager {
         }
 
         for info in window_infos {
+            let ax_element = match self.ax_cache.get(&info.id) {
+                Some(macos::AxEntry::Switchable(element)) => Some(element.clone()),
+                Some(macos::AxEntry::Rejected(_)) => continue,
+                // Unresolved and untitled: e.g. the toolbar strip of a fullscreen window
+                None if info.title.is_empty() => continue,
+                None => None,
+            };
             if let Some(app) = new_app_map.get_mut(&info.pid) {
-                let ax_element = self.ax_cache.get(&info.id).cloned();
                 app.windows.push(Window {
                     title: info.title,
                     id: info.id,
@@ -148,8 +155,7 @@ impl Window {
 
         if let Some(uuid) = self.display_uuid.as_deref() {
             macos::switch_to_space_instant(self.space_id, uuid);
-            let deadline =
-                std::time::Instant::now() + std::time::Duration::from_millis(200);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
             while std::time::Instant::now() < deadline {
                 if unsafe { macos::SLSGetActiveSpace(cid) } == self.space_id {
                     break;

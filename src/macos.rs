@@ -188,7 +188,12 @@ pub fn active_display_frame_at_cursor() -> Option<(f32, f32, f32, f32)> {
     }
 
     let b = CGDisplayBounds(display);
-    Some((b.origin.x as f32, b.origin.y as f32, b.size.width as f32, b.size.height as f32))
+    Some((
+        b.origin.x as f32,
+        b.origin.y as f32,
+        b.size.width as f32,
+        b.size.height as f32,
+    ))
 }
 
 pub fn set_accessory_mode() {
@@ -343,31 +348,55 @@ pub fn get_window_info_list(visible: &HashMap<u32, WindowLocation>) -> Result<Ve
     Ok(result)
 }
 
-pub fn resolve_ax_for_pid(
-    pid: i32,
-    target_wids: &HashSet<u32>,
-) -> HashMap<u32, Retained<AXUIElement>> {
-    let mut cg_w_id = 0;
+pub enum AxEntry {
+    Switchable(Retained<AXUIElement>),
+    /// Kept so `recheck` can promote it if the subrole changes (e.g. Books)
+    Rejected(Retained<AXUIElement>),
+}
+
+impl AxEntry {
+    pub fn recheck(&mut self) {
+        if let Self::Rejected(element) = self
+            && window_subrole(element).is_some_and(|s| is_switchable_subrole(&s))
+        {
+            *self = Self::Switchable(element.clone());
+        }
+    }
+}
+
+/// Resolves AX elements for `target_wids`; unresolved wids are absent.
+pub fn resolve_ax_for_pid(pid: i32, target_wids: &HashSet<u32>) -> HashMap<u32, AxEntry> {
     let mut result = HashMap::new();
-    let mut remaining: HashSet<u32> = target_wids.clone();
+    let consider = |result: &mut HashMap<_, _>, element: Retained<AXUIElement>| {
+        let Some(wid) = window_id_from_ax(&element) else {
+            return;
+        };
+        if !target_wids.contains(&wid) || result.contains_key(&wid) {
+            return;
+        }
+        let Some(subrole) = window_subrole(&element) else {
+            return;
+        };
+        let entry = if is_switchable_subrole(&subrole) {
+            AxEntry::Switchable(element)
+        } else {
+            eprintln!("[ax] hiding window {wid} (pid {pid}): subrole {subrole}");
+            AxEntry::Rejected(element)
+        };
+        result.insert(wid, entry);
+    };
+    let app = unsafe { AXUIElement::new_application(pid) };
 
     // Fast path 1: ask the application AX element for its window list
     // Note: AXWindows only covers the current Space and macOS sometimes
     // returns a stale or empty list, so it is a fast path, not the truth.
-    if let Some(windows) = ax_windows_for_pid(pid) {
-        for element in unsafe { windows.cast_unchecked::<AXUIElement>() } {
-            if remaining.is_empty() {
-                break;
+    if let Some(windows) = get_attribute::<CFArray>(&app, "AXWindows") {
+        for value in unsafe { windows.cast_unchecked::<CFType>() } {
+            if result.len() == target_wids.len() {
+                return result;
             }
-            if unsafe {
-                _AXUIElementGetWindow(&*element as *const AXUIElement as _, &mut cg_w_id)
-            } != AXError::Success
-            {
-                continue;
-            }
-            if remaining.contains(&cg_w_id) && is_window(&element) {
-                remaining.remove(&cg_w_id);
-                result.insert(cg_w_id, element.into());
+            if let Ok(element) = value.downcast::<AXUIElement>() {
+                consider(&mut result, element.into());
             }
         }
     }
@@ -377,69 +406,33 @@ pub fn resolve_ax_for_pid(
     // do answer AXFocusedWindow/AXMainWindow with the live window element.
     // Each refresh catches whichever window is active; the caller's cache
     // accumulates the rest across refreshes.
-    if !remaining.is_empty() {
-        let app = unsafe { AXUIElement::new_application(pid) };
-        for attr in ["AXFocusedWindow", "AXMainWindow"] {
-            if remaining.is_empty() {
-                break;
-            }
-            let Some(value) = get_attribute(&app, attr) else {
-                continue;
-            };
-            let Ok(element) = value.downcast::<AXUIElement>() else {
-                continue;
-            };
-            let Some(wid) = pid_from_ax(&element) else {
-                continue;
-            };
-            if remaining.contains(&wid) && is_window(&element) {
-                remaining.remove(&wid);
-                result.insert(wid, element.into());
-            }
+    for attr in ["AXFocusedWindow", "AXMainWindow"] {
+        if result.len() == target_wids.len() {
+            return result;
+        }
+        if let Some(element) = get_attribute::<AXUIElement>(&app, attr) {
+            consider(&mut result, element.into());
         }
     }
 
-    if remaining.is_empty() {
-        return result;
-    }
-
-    // Brute-force fallback
+    // Brute-force fallback. Window IDs can be very high (Chrome, Ghostty),
+    // so bound by time, not an ID cap.
     let mut buffer = init_ax_buffer(pid);
     let budget = Duration::from_millis((50 + 25 * target_wids.len() as u64).min(500));
     let deadline = Instant::now() + budget;
 
     let mut id = 0u64;
-    while !remaining.is_empty() && Instant::now() < deadline {
+    while result.len() < target_wids.len() && Instant::now() < deadline {
         let ptr = ax_request(&mut buffer, id);
         id += 1;
         if !ptr.is_null() {
-            let element = unsafe { Retained::from_raw(ptr).unwrap() };
-            if unsafe { _AXUIElementGetWindow(ptr as _, &mut cg_w_id) } != AXError::Success {
-                continue;
-            }
-
-            if remaining.contains(&cg_w_id) && is_window(&element) {
-                remaining.remove(&cg_w_id);
-                result.insert(cg_w_id, element);
-            }
+            consider(&mut result, unsafe { Retained::from_raw(ptr).unwrap() });
         }
     }
 
     result
 }
 
-fn ax_windows_for_pid(pid: i32) -> Option<CFRetained<CFArray>> {
-    let app = unsafe { AXUIElement::new_application(pid) };
-    let attr = CFString::from_static_str("AXWindows");
-    let mut ptr: *const CFType = std::ptr::null();
-    let res = unsafe { app.copy_attribute_value(&attr, NonNull::new_unchecked(&mut ptr)) };
-    if res != AXError::Success {
-        eprintln!("[ax] AXWindows lookup failed for pid {pid}: {res:#?}");
-        return None;
-    }
-    let value = unsafe { CFRetained::from_raw(NonNull::new(ptr as *mut CFType)?) };
-    value.downcast::<CFArray>().ok()
-}
 fn get_value<T: ConcreteType>(
     dict: &CFDictionary<CFString, CFType>,
     value: &CFString,
@@ -500,7 +493,7 @@ fn ax_request(buffer: &mut [u8; 20], id: u64) -> *mut AXUIElement {
     }
 }
 
-pub fn pid_from_ax(element: &AXUIElement) -> Option<u32> {
+pub fn window_id_from_ax(element: &AXUIElement) -> Option<u32> {
     let mut cg_id = 0;
     if unsafe { _AXUIElementGetWindow((element as *const _) as _, &mut cg_id) } != AXError::Success
     {
@@ -510,24 +503,20 @@ pub fn pid_from_ax(element: &AXUIElement) -> Option<u32> {
     Some(cg_id)
 }
 
-pub fn is_window(element: &AXUIElement) -> bool {
-    if matches!(pid_from_ax(element), None | Some(0)) {
-        return false;
-    };
-
-    let Some(subrole) = get_attribute(element, "AXSubrole") else {
-        return false;
-    };
-
-    if let Ok(str) = subrole.downcast::<CFString>() {
-        let string = str.to_string();
-        return matches!(string.as_str(), "AXStandardWindow" | "AXDialog");
+/// `None` for child elements (they share the window's ID) or unreadable attributes
+fn window_subrole(element: &AXUIElement) -> Option<String> {
+    let role = get_attribute::<CFString>(element, "AXRole")?.to_string();
+    if role != "AXWindow" {
+        return None;
     }
-
-    false
+    Some(get_attribute::<CFString>(element, "AXSubrole")?.to_string())
 }
 
-pub fn get_attribute(element: &AXUIElement, attr: &str) -> Option<CFRetained<CFType>> {
+fn is_switchable_subrole(subrole: &str) -> bool {
+    matches!(subrole, "AXStandardWindow" | "AXDialog")
+}
+
+pub fn get_attribute<T: ConcreteType>(element: &AXUIElement, attr: &str) -> Option<CFRetained<T>> {
     let mut ptr: *const CFType = std::ptr::null();
     let attr = CFString::from_str(attr);
     let res = unsafe { element.copy_attribute_value(&attr, NonNull::new_unchecked(&mut ptr)) };
@@ -535,7 +524,8 @@ pub fn get_attribute(element: &AXUIElement, attr: &str) -> Option<CFRetained<CFT
         eprintln!("AXUIElement::copy_attribute_value failed with {res:#?}");
         return None;
     }
-    Some(unsafe { CFRetained::from_raw(NonNull::new(ptr as *mut CFType)?) })
+    let value = unsafe { CFRetained::from_raw(NonNull::new(ptr as *mut CFType)?) };
+    value.downcast::<T>().ok()
 }
 
 pub struct IconData {
