@@ -16,7 +16,7 @@ jobs:
       - name: Install cargo-bundle
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-bundle
+          tool: cargo-bundle@0.12.0
       - name: Build
         run: cargo build --release
       - name: Bundle release
