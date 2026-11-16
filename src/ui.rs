@@ -1,10 +1,11 @@
 use std::collections::HashSet;
 
 use global_hotkey::{GlobalHotKeyEvent, HotKeyState};
-use iced::keyboard::{self, Key, key::Named};
-use iced::widget::text::Wrapping;
+use iced::Event::Keyboard;
+use iced::event;
+use iced::keyboard::{self, Event::KeyPressed, Key, Modifiers, key::Named};
 use iced::widget::{
-    center, column, container, image, rich_text, row, scrollable, span, text_input,
+    center, column, container, image, rich_text, row, scrollable, span, text::Wrapping, text_input,
 };
 use iced::window;
 use iced::{Element, Length, Subscription, Task, Theme, color};
@@ -312,23 +313,26 @@ pub fn subscription(state: &Switcheroo) -> Subscription<Message> {
     ];
 
     if state.picker_window.is_some() {
-        subs.push(iced::event::listen_with(
-            |event, status, _window| match event {
-                iced::Event::Keyboard(keyboard::Event::KeyPressed {
-                    key: Key::Named(Named::Escape),
-                    ..
-                }) => Some(Message::HidePicker),
-                iced::Event::Keyboard(keyboard::Event::KeyPressed {
-                    key: Key::Named(Named::ArrowDown),
-                    ..
-                }) if status == iced::event::Status::Ignored => Some(Message::SelectNext),
-                iced::Event::Keyboard(keyboard::Event::KeyPressed {
-                    key: Key::Named(Named::ArrowUp),
-                    ..
-                }) if status == iced::event::Status::Ignored => Some(Message::SelectPrev),
+        // text_input captures Escape (to unfocus itself), so listen regardless of status.
+        subs.push(event::listen_with(|event, _status, _window| match event {
+            Keyboard(KeyPressed {
+                key: Key::Named(Named::Escape),
+                ..
+            }) => Some(Message::HidePicker),
+            _ => None,
+        }));
+        subs.push(keyboard::listen().filter_map(|event| {
+            let KeyPressed { key, modifiers, .. } = event else {
+                return None;
+            };
+            match (key.as_ref(), modifiers) {
+                (Key::Named(Named::ArrowDown), _) => Some(Message::SelectNext),
+                (Key::Named(Named::ArrowUp), _) => Some(Message::SelectPrev),
+                (Key::Character("n"), Modifiers::CTRL) => Some(Message::SelectNext),
+                (Key::Character("p"), Modifiers::CTRL) => Some(Message::SelectPrev),
                 _ => None,
-            },
-        ));
+            }
+        }));
     }
 
     Subscription::batch(subs)
