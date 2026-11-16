@@ -4,6 +4,7 @@ use global_hotkey::{
 };
 use objc2_application_services::AXUIElement;
 
+mod dock_swipe;
 mod macos;
 mod ui;
 mod windows;
@@ -15,6 +16,8 @@ fn main() -> iced::Result {
         std::process::exit(1);
     }
 
+    // SAFETY: objc2 marks these unsafe by default; they take no pointers
+    // beyond the live system-wide element.
     unsafe {
         let system_wide = AXUIElement::new_system_wide();
         AXUIElement::set_messaging_timeout(&system_wide, 0.5);

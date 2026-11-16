@@ -24,7 +24,5 @@ identifier = "com.bootreer.switcheroo"
 version = "0.0.0"
 icon = [ "assets/artemgus.icns" ]
 
-osx_info_plist_snippet = '''
-<key>LSUIElement</key>
-<true/>
-'''
+[package.metadata.bundle.osx]
+info_plist_exts = [ "assets/Info.plist.ext" ]
