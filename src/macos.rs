@@ -18,20 +18,19 @@ use objc2_core_foundation::{
     CGSize, ConcreteType,
 };
 use objc2_core_graphics::{
-    CGDataProvider, CGDisplayBounds, CGError, CGEvent, CGEventField, CGEventTapLocation,
-    CGEventType, CGGetDisplaysWithPoint, CGImage, CGPreflightScreenCaptureAccess,
-    CGRequestScreenCaptureAccess, CGWindowID, CGWindowListCopyWindowInfo,
-    CGWindowListOption as Options, kCGNullWindowID as NullID, kCGWindowLayer, kCGWindowName,
-    kCGWindowNumber, kCGWindowOwnerPID,
+    CGDataProvider, CGDisplayBounds, CGError, CGEvent, CGGetDisplaysWithPoint, CGImage,
+    CGPreflightScreenCaptureAccess, CGRequestScreenCaptureAccess, CGWindowID,
+    CGWindowListCopyWindowInfo, CGWindowListOption as Options, kCGNullWindowID as NullID,
+    kCGWindowLayer, kCGWindowName, kCGWindowNumber, kCGWindowOwnerPID,
 };
 
 // Undocumented internal macos framework
 #[link(name = "Skylight", kind = "framework")]
-#[allow(dead_code)]
 unsafe extern "C" {
-    pub fn SLSMainConnectionID() -> u32;
-    pub fn SLSGetActiveSpace(cid: u32) -> u64;
-    fn SLSWindowIsOnSpace(cid: u32, window_id: CGWindowID, space_id: u64) -> bool;
+    // SAFETY: these take and return plain integers; an invalid connection id
+    // yields 0, not undefined behaviour.
+    pub safe fn SLSMainConnectionID() -> u32;
+    pub safe fn SLSGetActiveSpace(cid: u32) -> u64;
     fn SLSCopyManagedDisplaySpaces(cid: u32) -> *mut c_void;
     fn SLSCopyWindowsWithOptionsAndTags(
         cid: u32,
@@ -43,78 +42,25 @@ unsafe extern "C" {
         set_tags: *mut u64,
         clear_tags: *mut u64,
     ) -> *const c_void;
-    fn SLSOrderWindow(cid: u32, wid: u32, mode: i32, relative_to: u32) -> i32;
-    fn SLSManagedDisplaySetCurrentSpace(
-        cid: u32,
-        display_uuid: *const c_void,
-        space_id: u64,
-    ) -> i32;
-    fn SLSShowSpaces(cid: u32, space_ids: *const c_void) -> i32;
     pub fn SLSGetWindowBounds(cid: u32, wid: CGWindowID, bounds: *mut CGRect) -> CGError;
-}
-
-// Constants and post_dock_swipe ported from github.com/jurplel/InstantSpaceSwitcher
-// Private CGEventField values and constants
-const FIELD_GESTURE_HID_TYPE: CGEventField = CGEventField(110);
-const FIELD_GESTURE_SWIPE_MOTION: CGEventField = CGEventField(123);
-const FIELD_GESTURE_SWIPE_PROGRESS: CGEventField = CGEventField(124);
-const FIELD_GESTURE_SWIPE_VELOCITY_X: CGEventField = CGEventField(129);
-const FIELD_GESTURE_SWIPE_VELOCITY_Y: CGEventField = CGEventField(130);
-const FIELD_GESTURE_PHASE: CGEventField = CGEventField(132);
-
-const CGS_EVENT_DOCK_CONTROL: CGEventType = CGEventType(30);
-const IO_HID_EVENT_TYPE_DOCK_SWIPE: i64 = 23;
-const CGS_GESTURE_MOTION_HORIZONTAL: i64 = 1;
-const CGS_GESTURE_PHASE_BEGAN: i64 = 1;
-const CGS_GESTURE_PHASE_CHANGED: i64 = 2;
-const CGS_GESTURE_PHASE_ENDED: i64 = 4;
-const GESTURE_SPEED: f64 = 2000.0;
-// Smallest positive f32 subnormal cast to f64
-const FLT_TRUE_MIN_AS_F64: f64 = 1.401298464324817e-45_f64;
-
-fn post_dock_swipe(phase: i64, is_right: bool, velocity: f64) {
-    let progress = if is_right {
-        FLT_TRUE_MIN_AS_F64
-    } else {
-        -FLT_TRUE_MIN_AS_F64
-    };
-    let vel = if is_right { velocity } else { -velocity };
-
-    if let Some(ref ev) = CGEvent::new(None) {
-        CGEvent::set_type(Some(ev), CGS_EVENT_DOCK_CONTROL);
-        CGEvent::set_integer_value_field(
-            Some(ev),
-            FIELD_GESTURE_HID_TYPE,
-            IO_HID_EVENT_TYPE_DOCK_SWIPE,
-        );
-        CGEvent::set_integer_value_field(Some(ev), FIELD_GESTURE_PHASE, phase);
-        CGEvent::set_double_value_field(Some(ev), FIELD_GESTURE_SWIPE_PROGRESS, progress);
-        CGEvent::set_integer_value_field(
-            Some(ev),
-            FIELD_GESTURE_SWIPE_MOTION,
-            CGS_GESTURE_MOTION_HORIZONTAL,
-        );
-        CGEvent::set_double_value_field(Some(ev), FIELD_GESTURE_SWIPE_VELOCITY_X, vel);
-        CGEvent::set_double_value_field(Some(ev), FIELD_GESTURE_SWIPE_VELOCITY_Y, vel);
-        CGEvent::post(CGEventTapLocation::SessionEventTap, Some(ev));
-    }
 }
 
 pub fn switch_to_space_instant(target_space_id: u64, display_uuid: &str) {
     let mut current_space_id: Option<u64> = None;
     let mut ordered_space_ids: Vec<u64> = Vec::new();
 
-    for display in copy_managed_display_spaces() {
+    let Some(displays) = copy_managed_display_spaces() else {
+        return;
+    };
+    for display in dicts(&displays) {
         if display_uuid_of(&display).as_deref() != Some(display_uuid) {
             continue;
         }
 
-        // CFDictionary -> CFDict is phantom-only; cast_unchecked is sound.
         if let Some(current_dict) =
             get_value::<CFDictionary>(&display, &CFString::from_static_str("Current Space"))
         {
-            let current_dict: CFRetained<CFDict> =
-                unsafe { CFRetained::cast_unchecked(current_dict) };
+            let current_dict = as_cf_dict(current_dict);
             if let Some(id) =
                 get_value::<CFNumber>(&current_dict, &CFString::from_static_str("id64"))
                 && let Some(v) = id.as_i64()
@@ -124,7 +70,7 @@ pub fn switch_to_space_instant(target_space_id: u64, display_uuid: &str) {
         }
 
         let spaces = get_value_unchecked::<CFArray>(&display, &CFString::from_static_str("Spaces"));
-        for space in unsafe { spaces.cast_unchecked::<CFDict>() } {
+        for space in dicts(&spaces) {
             if let Some(id) = get_value::<CFNumber>(&space, &CFString::from_static_str("id64"))
                 && let Some(v) = id.as_i64()
             {
@@ -154,25 +100,20 @@ pub fn switch_to_space_instant(target_space_id: u64, display_uuid: &str) {
 
     let is_right = target_idx > current_idx;
     let hops = target_idx.abs_diff(current_idx);
-    // ISS multiplies velocity by hop count for correct multi-space gesture physics
-    let velocity = GESTURE_SPEED * hops as f64;
+    crate::dock_swipe::switch_spaces(is_right, hops);
+}
 
-    for _ in 0..hops {
-        post_dock_swipe(CGS_GESTURE_PHASE_BEGAN, is_right, velocity);
-        post_dock_swipe(CGS_GESTURE_PHASE_CHANGED, is_right, velocity);
-        post_dock_swipe(CGS_GESTURE_PHASE_ENDED, is_right, velocity);
-    }
+fn main_thread() -> MainThreadMarker {
+    MainThreadMarker::new().expect("AppKit must be called from the main thread")
 }
 
 pub fn activate_application() {
-    let mtm = unsafe { MainThreadMarker::new_unchecked() };
-    let app = NSApplication::sharedApplication(mtm);
+    let app = NSApplication::sharedApplication(main_thread());
     app.activate();
 }
 
 pub fn hide_application() {
-    let mtm = unsafe { MainThreadMarker::new_unchecked() };
-    let app = NSApplication::sharedApplication(mtm);
+    let app = NSApplication::sharedApplication(main_thread());
     app.hide(None);
 }
 
@@ -184,6 +125,8 @@ pub fn active_display_frame_at_cursor() -> Option<(f32, f32, f32, f32)> {
 
     let mut display = 0u32;
     let mut count = 0u32;
+    // SAFETY: both out-pointers are valid locals and max_displays is 1, so at
+    // most one id is written to `display`.
     unsafe { CGGetDisplaysWithPoint(loc, 1, &mut display, &mut count) };
 
     if count == 0 {
@@ -200,8 +143,7 @@ pub fn active_display_frame_at_cursor() -> Option<(f32, f32, f32, f32)> {
 }
 
 pub fn set_accessory_mode() {
-    let mtm = unsafe { MainThreadMarker::new_unchecked() };
-    let app = NSApplication::sharedApplication(mtm);
+    let app = NSApplication::sharedApplication(main_thread());
     app.setActivationPolicy(NSApplicationActivationPolicy::Accessory);
 }
 
@@ -226,12 +168,32 @@ unsafe extern "C" {
 
 type CFDict = CFDictionary<CFString, CFType>;
 
-fn copy_managed_display_spaces() -> CFRetained<CFArray<CFDict>> {
-    let cid = unsafe { SLSMainConnectionID() };
-    unsafe {
-        let ptr = NonNull::new_unchecked(SLSCopyManagedDisplaySpaces(cid) as *mut CFArray<CFDict>);
-        CFRetained::from_raw(ptr)
-    }
+fn as_cf_dict(dict: CFRetained<CFDictionary>) -> CFRetained<CFDict> {
+    // SAFETY: CFDictionary's key and value parameters are phantom: lookups go
+    // through CFEqual/CFHash on any CF object, and get_value type-checks every
+    // value it reads before use.
+    unsafe { CFRetained::cast_unchecked(dict) }
+}
+
+/// The dictionary elements of `array`, skipping any element of another type.
+fn dicts(array: &CFArray) -> impl Iterator<Item = CFRetained<CFDict>> + '_ {
+    // SAFETY: every CFArray element is a CF object, which is all CFType claims.
+    let items = unsafe { array.cast_unchecked::<CFType>() };
+    items
+        .iter()
+        .filter_map(|item| item.downcast::<CFDictionary>().ok().map(as_cf_dict))
+}
+
+fn copy_managed_display_spaces() -> Option<CFRetained<CFArray>> {
+    // SAFETY: takes a connection id by value and returns a +1 (Copy rule)
+    // CFArray or NULL.
+    let ptr = unsafe { SLSCopyManagedDisplaySpaces(SLSMainConnectionID()) };
+    let Some(ptr) = NonNull::new(ptr.cast::<CFArray>()) else {
+        log::warn!("SLSCopyManagedDisplaySpaces returned NULL");
+        return None;
+    };
+    // SAFETY: non-null and owned (+1), so CFRetained takes over that retain.
+    Some(unsafe { CFRetained::from_raw(ptr) })
 }
 
 fn display_uuid_of(display: &CFDict) -> Option<String> {
@@ -254,10 +216,13 @@ pub struct WindowInfo {
 }
 
 pub fn get_visible_window_ids() -> HashMap<u32, WindowLocation> {
-    let cid = unsafe { SLSMainConnectionID() };
+    let cid = SLSMainConnectionID();
     let mut visible = HashMap::new();
+    let Some(displays) = copy_managed_display_spaces() else {
+        return visible;
+    };
 
-    for display in copy_managed_display_spaces() {
+    for display in dicts(&displays) {
         let display_uuid = display_uuid_of(&display);
         if display_uuid.is_none() {
             log::warn!("missing Display Identifier in SLSCopyManagedDisplaySpaces dict");
@@ -265,7 +230,7 @@ pub fn get_visible_window_ids() -> HashMap<u32, WindowLocation> {
 
         let spaces = get_value_unchecked::<CFArray>(&display, &CFString::from_static_str("Spaces"));
 
-        for space in unsafe { spaces.cast_unchecked::<CFDict>() } {
+        for space in dicts(&spaces) {
             let id = get_value_unchecked::<CFNumber>(&space, &CFString::from_static_str("id64"));
             let Some(space_id) = id.as_i64().map(|v| v as u64) else {
                 continue;
@@ -276,6 +241,8 @@ pub fn get_visible_window_ids() -> HashMap<u32, WindowLocation> {
             let mut clear_tags: u64 = 0;
             let space_ids = CFArray::from_retained_objects(std::slice::from_ref(&id));
 
+            // SAFETY: space_ids is a live CFArray for the call and both tag
+            // pointers are valid locals. Returns a +1 CFArray or NULL.
             let w_ptr = unsafe {
                 SLSCopyWindowsWithOptionsAndTags(
                     cid,
@@ -287,13 +254,17 @@ pub fn get_visible_window_ids() -> HashMap<u32, WindowLocation> {
                 )
             };
 
-            let arr = unsafe {
-                let ptr = NonNull::new_unchecked(w_ptr as *mut CFArray<CFNumber>);
-                CFRetained::from_raw(ptr)
+            let Some(w_ptr) = NonNull::new(w_ptr as *mut CFArray) else {
+                log::warn!("SLSCopyWindowsWithOptionsAndTags returned NULL for space {space_id}");
+                continue;
             };
+            // SAFETY: non-null and owned (+1), so CFRetained takes over that retain.
+            let arr = unsafe { CFRetained::from_raw(w_ptr) };
+            // SAFETY: every CFArray element is a CF object.
+            let items = unsafe { arr.cast_unchecked::<CFType>() };
 
-            for wid in arr {
-                if let Some(wid) = wid.as_i64() {
+            for wid in items {
+                if let Some(wid) = wid.downcast::<CFNumber>().ok().and_then(|n| n.as_i64()) {
                     visible.insert(
                         wid as u32,
                         WindowLocation {
@@ -315,16 +286,25 @@ pub fn get_window_info_list(visible: &HashMap<u32, WindowLocation>) -> Result<Ve
         return Err(anyhow!("CGWindowListCopyWindowInfo failed."));
     };
 
+    // SAFETY: immutable CFString constants exported by CoreGraphics.
+    let (layer_key, number_key, pid_key, name_key) = unsafe {
+        (
+            kCGWindowLayer,
+            kCGWindowNumber,
+            kCGWindowOwnerPID,
+            kCGWindowName,
+        )
+    };
     let mut result = Vec::new();
-    for dict in unsafe { window_list.cast_unchecked() } {
-        let layer = get_value_unchecked::<CFNumber>(&dict, unsafe { kCGWindowLayer })
+    for dict in dicts(&window_list) {
+        let layer = get_value_unchecked::<CFNumber>(&dict, layer_key)
             .as_i32()
             .unwrap();
         if layer != 0 {
             continue;
         }
 
-        let window_number = get_value_unchecked::<CFNumber>(&dict, unsafe { kCGWindowNumber })
+        let window_number = get_value_unchecked::<CFNumber>(&dict, number_key)
             .as_i64()
             .unwrap() as u32;
 
@@ -332,11 +312,11 @@ pub fn get_window_info_list(visible: &HashMap<u32, WindowLocation>) -> Result<Ve
             continue;
         };
 
-        let pid = get_value_unchecked::<CFNumber>(&dict, unsafe { kCGWindowOwnerPID })
+        let pid = get_value_unchecked::<CFNumber>(&dict, pid_key)
             .as_i32()
             .unwrap();
         // Untitled = helper window (e.g. fullscreen toolbar strip)
-        let Some(title) = get_value::<CFString>(&dict, unsafe { kCGWindowName })
+        let Some(title) = get_value::<CFString>(&dict, name_key)
             .map(|v| v.to_string())
             .filter(|t| !t.is_empty())
         else {
@@ -392,12 +372,15 @@ pub fn resolve_ax_for_pid(pid: i32, target_wids: &HashSet<u32>) -> HashMap<u32, 
         };
         result.insert(wid, entry);
     };
+    // SAFETY: objc2 marks this unsafe by default; it takes a pid by value and
+    // returns an element even for a dead pid (requests on it then fail).
     let app = unsafe { AXUIElement::new_application(pid) };
 
     // Fast path 1: ask the application AX element for its window list
     // Note: AXWindows only covers the current Space and macOS sometimes
     // returns a stale or empty list, so it is a fast path, not the truth.
     if let Some(windows) = get_attribute::<CFArray>(&app, "AXWindows") {
+        // SAFETY: every CFArray element is a CF object.
         for value in unsafe { windows.cast_unchecked::<CFType>() } {
             if result.len() == target_wids.len() {
                 return result;
@@ -432,8 +415,10 @@ pub fn resolve_ax_for_pid(pid: i32, target_wids: &HashSet<u32>) -> HashMap<u32, 
     while result.len() < target_wids.len() && Instant::now() < deadline {
         let ptr = ax_request(&mut buffer, id);
         id += 1;
-        if !ptr.is_null() {
-            consider(&mut result, unsafe { Retained::from_raw(ptr).unwrap() });
+        // SAFETY: _AXUIElementCreateWithRemoteToken follows the Create rule,
+        // so a non-null result is an owned (+1) AXUIElement.
+        if let Some(element) = unsafe { Retained::from_raw(ptr) } {
+            consider(&mut result, element);
         }
     }
 
@@ -470,12 +455,15 @@ pub fn make_key_window(id: u32, psn: &ProcessSerialNumber) -> CGError {
 
     bytes[0x08] = 0x01;
 
+    // SAFETY: psn is a valid reference and `bytes` is the full 0xf8-byte
+    // event record SkyLight reads (size stored at offset 0x04).
     let res = unsafe { SLPSPostEventRecordTo(psn, bytes.as_mut_ptr()) };
     if res != CGError::Success {
         return res;
     }
 
     bytes[0x08] = 0x02;
+    // SAFETY: as above.
     let res = unsafe { SLPSPostEventRecordTo(psn, bytes.as_mut_ptr()) };
     if res != CGError::Success {
         return res;
@@ -494,6 +482,8 @@ fn init_ax_buffer(pid: i32) -> [u8; 20] {
 fn ax_request(buffer: &mut [u8; 20], id: u64) -> *mut AXUIElement {
     buffer[12..20].copy_from_slice(&id.to_ne_bytes());
     let data = CFData::from_bytes(buffer);
+    // SAFETY: `data` is a live CFData for the duration of the call; the
+    // returned element is owned by the caller (Create rule) or NULL.
     unsafe {
         _AXUIElementCreateWithRemoteToken(CFRetained::as_ptr(&data).as_ptr() as _)
             as *mut AXUIElement
@@ -502,6 +492,7 @@ fn ax_request(buffer: &mut [u8; 20], id: u64) -> *mut AXUIElement {
 
 pub fn window_id_from_ax(element: &AXUIElement) -> Option<u32> {
     let mut cg_id = 0;
+    // SAFETY: `element` is a live AXUIElement and cg_id a valid out-pointer.
     if unsafe { _AXUIElementGetWindow((element as *const _) as _, &mut cg_id) } != AXError::Success
     {
         return None;
@@ -526,11 +517,13 @@ fn is_switchable_subrole(subrole: &str) -> bool {
 pub fn get_attribute<T: ConcreteType>(element: &AXUIElement, attr: &str) -> Option<CFRetained<T>> {
     let mut ptr: *const CFType = std::ptr::null();
     let attr = CFString::from_str(attr);
-    let res = unsafe { element.copy_attribute_value(&attr, NonNull::new_unchecked(&mut ptr)) };
+    // SAFETY: the out-pointer comes from a live local, so it is valid and non-null.
+    let res = unsafe { element.copy_attribute_value(&attr, NonNull::from(&mut ptr)) };
     if res != AXError::Success {
         log::trace!("copy_attribute_value({attr}) failed with {res:?}");
         return None;
     }
+    // SAFETY: on success the value is returned +1 (Copy rule); NULL is handled by `?`.
     let value = unsafe { CFRetained::from_raw(NonNull::new(ptr as *mut CFType)?) };
     value.downcast::<T>().ok()
 }
@@ -545,6 +538,8 @@ pub struct IconData {
 pub fn ns_image_to_rgba(image: &NSImage) -> Option<IconData> {
     image.setSize(CGSize::new(16., 16.));
 
+    // SAFETY: a NULL proposed rect is documented as "use the image's size",
+    // and context/hints are optional.
     let cg_image =
         unsafe { image.CGImageForProposedRect_context_hints(std::ptr::null_mut(), None, None) };
 
@@ -567,7 +562,7 @@ pub fn ns_image_to_rgba(image: &NSImage) -> Option<IconData> {
         24 => {
             // RGB -> RGBA
             let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
-            for chunk in raw_data.chunks_exact(3) {
+            for chunk in raw_data.as_chunks::<3>().0 {
                 rgba.extend_from_slice(chunk);
                 rgba.push(255);
             }
@@ -613,9 +608,11 @@ pub fn ns_image_to_rgba(image: &NSImage) -> Option<IconData> {
 /// Requests Accessibility and Screen Recording (for titles), opening Settings for any missing
 pub fn request_permissions() -> bool {
     let prompt = CFDictionary::from_slices(
+        // SAFETY: immutable CFString constant exported by ApplicationServices.
         &[unsafe { kAXTrustedCheckOptionPrompt }],
         &[CFBoolean::new(true)],
     );
+    // SAFETY: the options dictionary has the documented CFString -> CFBoolean shape.
     let accessibility = unsafe { AXIsProcessTrustedWithOptions(Some(prompt.as_opaque())) };
     let screen_recording = CGPreflightScreenCaptureAccess() || CGRequestScreenCaptureAccess();
 

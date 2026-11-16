@@ -135,8 +135,10 @@ pub struct Window {
 
 impl Window {
     pub fn focus(&self, app: &NSRunningApplication) -> Result<()> {
-        let cid = unsafe { macos::SLSMainConnectionID() };
+        let cid = macos::SLSMainConnectionID();
         let mut rect = std::mem::MaybeUninit::<CGRect>::uninit();
+        // SAFETY: `rect` is a valid out-pointer, and it is only read after
+        // SkyLight reports success, which means it was written.
         let bounds = unsafe {
             let res = macos::SLSGetWindowBounds(cid, self.id, rect.as_mut_ptr());
             if res != CGError::Success {
@@ -155,7 +157,7 @@ impl Window {
             macos::switch_to_space_instant(self.space_id, uuid);
             let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
             while std::time::Instant::now() < deadline {
-                if unsafe { macos::SLSGetActiveSpace(cid) } == self.space_id {
+                if macos::SLSGetActiveSpace(cid) == self.space_id {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(5));
@@ -170,6 +172,7 @@ impl Window {
         let pid = app.processIdentifier();
         let mut psn = ProcessSerialNumber::default();
 
+        // SAFETY: psn is a valid, correctly sized ProcessSerialNumber out-pointer.
         #[allow(deprecated)]
         let res = unsafe { GetProcessForPID(pid, (&mut psn as *mut _) as _) };
 
@@ -177,6 +180,7 @@ impl Window {
             return Err(anyhow!("Couldn't get PSN for PID"));
         }
 
+        // SAFETY: psn is a valid reference to a PSN filled in above.
         let res = unsafe { _SLPSSetFrontProcessWithOptions(&psn, self.id, 0x200) };
         if res != CGError::Success {
             return Err(anyhow!("Setting front process failed with: {res:?}"));
@@ -188,6 +192,8 @@ impl Window {
         }
 
         if let Some(ax_element) = &self.ax_element {
+            // SAFETY: objc2 marks this unsafe by default; both arguments are
+            // live references and the action name is a valid CFString.
             unsafe {
                 AXUIElement::perform_action(ax_element, &CFString::from_static_str("AXRaise"))
             };
