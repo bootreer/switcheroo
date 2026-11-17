@@ -1,14 +1,33 @@
 use crate::macos::{self, _SLPSSetFrontProcessWithOptions, ProcessSerialNumber, make_key_window};
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, anyhow};
 
 use objc2::rc::Retained;
 use objc2_app_kit::{NSApplicationActivationPolicy, NSRunningApplication, NSWorkspace};
 #[allow(deprecated)]
-use objc2_application_services::{AXUIElement, GetProcessForPID};
+use objc2_application_services::{AXError, AXUIElement, GetProcessForPID};
 use objc2_core_foundation::{CFString, CGPoint, CGRect};
 use objc2_core_graphics::{CGError, CGWarpMouseCursorPosition};
+
+/// Incremented on every focus, so a background raise can tell it has been superseded.
+static FOCUS_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+/// Carries an AX element to the background focus thread. objc2 doesn't mark
+/// `AXUIElement` as `Send`, but the Accessibility API may be called from any
+/// thread (alt-tab-macos raises windows from a background queue too).
+struct SendAx(Retained<AXUIElement>);
+
+// SAFETY: see above. The element is used for a single AXRaise on the receiving
+// thread and released there; CFRelease is thread safe.
+unsafe impl Send for SendAx {}
+
+impl SendAx {
+    fn into_inner(self) -> Retained<AXUIElement> {
+        self.0
+    }
+}
 
 #[derive(Default)]
 pub struct Manager {
@@ -154,6 +173,15 @@ impl Window {
         CGWarpMouseCursorPosition(center);
 
         if let Some(uuid) = self.display_uuid.as_deref() {
+            // Raise the window within its own space before switching to it, so it is
+            // already on top when the space appears. Otherwise the space's previous top
+            // window shows until the front-process call below, after the wait.
+            if macos::SLSGetActiveSpace(cid) != self.space_id
+                && let Some(ax_element) = &self.ax_element
+            {
+                ax_raise(ax_element);
+            }
+
             macos::switch_to_space_instant(self.space_id, uuid);
             let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
             while std::time::Instant::now() < deadline {
@@ -186,19 +214,39 @@ impl Window {
             return Err(anyhow!("Setting front process failed with: {res:?}"));
         }
 
-        let res = make_key_window(self.id, &psn);
-        if res != CGError::Success {
-            return Err(anyhow!("Failed at setting key window."));
-        }
+        // The window is already fronted. Making it key and raising it are calls into the
+        // target app (AXRaise can block up to the AX messaging timeout), so run them off
+        // the main thread instead of keeping the picker up while they finish.
+        let generation = FOCUS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+        let wid = self.id;
+        let ax_element = self.ax_element.clone().map(SendAx);
+        std::thread::spawn(move || {
+            // A newer focus has started: finishing this one would cover its window.
+            let superseded = || FOCUS_GENERATION.load(Ordering::SeqCst) != generation;
 
-        if let Some(ax_element) = &self.ax_element {
-            // SAFETY: objc2 marks this unsafe by default; both arguments are
-            // live references and the action name is a valid CFString.
-            unsafe {
-                AXUIElement::perform_action(ax_element, &CFString::from_static_str("AXRaise"))
-            };
-        }
+            if superseded() {
+                return;
+            }
+            let res = make_key_window(wid, &psn);
+            if res != CGError::Success {
+                log::warn!("window {wid}: make_key_window failed with {res:?}");
+            }
+
+            if superseded() {
+                return;
+            }
+            if let Some(ax_element) = ax_element.map(SendAx::into_inner) {
+                ax_raise(&ax_element);
+            }
+        });
 
         Ok(())
     }
+}
+
+/// Asks the window's app to raise it, without activating the app.
+fn ax_raise(element: &AXUIElement) -> AXError {
+    // SAFETY: objc2 marks this unsafe by default; both arguments are
+    // live references and the action name is a valid CFString.
+    unsafe { AXUIElement::perform_action(element, &CFString::from_static_str("AXRaise")) }
 }
