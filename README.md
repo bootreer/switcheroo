@@ -1,12 +1,25 @@
 # switcheroo
 very much wip but kinda works
 
+## usage + building
+Accessibility, Device Control and Data Access, and Screen/System Audio Recording need to be enabled to function correctly.
+
+Cmd + D opens the switcher.
+
+You can use [`cargo-bundle`](https://github.com/burtonageo/cargo-bundle) to build a .dmg:
+```bash
+cargo install cargo-bundle
+cargo bundle --release
+```
+or just run it in a terminal
+```bash
+cargo run --release
+```
+or just download the CI artifact.
+
 ## why
 1. I honestly just need a window switcher on macOS (like [rofi](https://github.com/davatorium/rofi)) where the mouse follows focus (which the Raycast builtin switcher cannot afaict), and I don't like cycling through windows constantly with [Alt-Tab](https://github.com/lwouis/alt-tab-macos).
 2. procrastination
-
-##
-Accessibility and Screen/System Audio Recording need to enabled to function.
 
 ## acknowledgements
 - [Alt-Tab](https://github.com/lwouis/alt-tab-macos) and [yabai](https://github.com/asmvik/yabai) for documenting private macOS apis, as well as inspiration for a lot of the core logic
