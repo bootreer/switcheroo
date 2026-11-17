@@ -123,22 +123,24 @@ pub fn update(state: &mut Switcheroo, message: Message) -> Task<Message> {
         }
         Message::SelectNext => {
             if state.filtered_count == 0 {
-                return Task::none();
+                state.selected = None;
+            } else {
+                state.selected = Some(match state.selected {
+                    Some(idx) => (idx + 1) % state.filtered_count,
+                    None => 0,
+                });
             }
-            state.selected = Some(match state.selected {
-                Some(idx) => (idx + 1).min(state.filtered_count - 1),
-                None => 0,
-            });
             Task::none()
         }
         Message::SelectPrev => {
             if state.filtered_count == 0 {
                 state.selected = None;
             } else {
-                state.selected = match state.selected {
-                    Some(idx) if idx > 0 => Some(idx - 1),
-                    _ => Some(0),
-                };
+                state.selected = Some(match state.selected {
+                    Some(0) => state.filtered_count - 1,
+                    Some(idx) => (idx - 1) % state.filtered_count,
+                    None => 0,
+                });
             }
             Task::none()
         }
